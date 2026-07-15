@@ -48,9 +48,12 @@
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
+  const apiBase = new URLSearchParams(window.location.search).get("api") ||
+    window.BACKUP_API_BASE || "";
+
   const api = {
     async request(path, options = {}) {
-      const response = await fetch(path, {
+      const response = await fetch(`${apiBase}${path}`, {
         headers: { "Content-Type": "application/json", ...(options.headers || {}) },
         ...options
       });
