@@ -4,6 +4,7 @@
 #include "scheduler/restore_scheduler.h"
 #include "scheduler/task_manager.h"
 #include "../../tests/mocks/mock_modules.h"
+#include "../../tests/helpers/temp_dir.h"
 
 using namespace backup;
 using namespace backup::testing;
@@ -109,4 +110,23 @@ TEST(BackupSchedulerContract, CancelStopsScan) {
 
     Task task = task_mgr.get_task(task_id);
     EXPECT_EQ(task.status, TaskStatus::CANCELLED);
+}
+
+TEST(BackupSchedulerStubIntegration, DefaultStubsCreateArchive) {
+    TempDir tmp;
+    const auto source_path = tmp.create_dir("source");
+    const auto archive_path = tmp.path() + "/archive.dat";
+
+    TaskManager task_mgr;
+    BackupScheduler scheduler(task_mgr);
+    BackupRequest req;
+    req.source_path = source_path;
+    req.output_path = archive_path;
+
+    const auto task_id = task_mgr.create_backup_task(req);
+    Result result = scheduler.run(task_id, req);
+
+    EXPECT_EQ(result.status, Status::SUCCESS);
+    EXPECT_TRUE(std::filesystem::exists(archive_path));
+    EXPECT_EQ(task_mgr.get_task(task_id).status, TaskStatus::SUCCESS);
 }

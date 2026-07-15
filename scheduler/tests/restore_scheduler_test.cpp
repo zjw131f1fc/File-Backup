@@ -2,7 +2,9 @@
 #include <gmock/gmock.h>
 #include "scheduler/restore_scheduler.h"
 #include "scheduler/task_manager.h"
+#include "modules/archive_writer/archive_writer.h"
 #include "../../tests/mocks/mock_modules.h"
+#include "../../tests/helpers/temp_dir.h"
 
 using namespace backup;
 using namespace backup::testing;
@@ -47,4 +49,26 @@ TEST(RestoreSchedulerContract, CancelStopsLoop) {
 
     Task task = task_mgr.get_task(task_id);
     EXPECT_EQ(task.status, TaskStatus::CANCELLED);
+}
+
+TEST(RestoreSchedulerStubIntegration, DefaultStubsRestoreEmptyArchive) {
+    TempDir archive_tmp;
+    TempDir restore_tmp;
+    const auto archive_path = archive_tmp.path() + "/archive.dat";
+
+    auto writer = create_archive(archive_path);
+    ASSERT_NE(writer, nullptr);
+    ASSERT_EQ(writer->commit().status, Status::SUCCESS);
+
+    TaskManager task_mgr;
+    RestoreScheduler scheduler(task_mgr);
+    RestoreRequest req;
+    req.archive_path = archive_path;
+    req.target_path = restore_tmp.path();
+
+    const auto task_id = task_mgr.create_restore_task(req);
+    Result result = scheduler.run(task_id, req);
+
+    EXPECT_EQ(result.status, Status::SUCCESS);
+    EXPECT_EQ(task_mgr.get_task(task_id).status, TaskStatus::SUCCESS);
 }
