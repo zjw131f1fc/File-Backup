@@ -47,7 +47,7 @@ TEST(RestoreSchedulerContract, CancelStopsLoop) {
         // 取消后不再调用
     }
 
-    RestoreScheduler scheduler(task_mgr, &mock_reader, &mock_restorer);
+    RestoreScheduler scheduler(task_mgr, mock_reader, mock_restorer);
     Result r = scheduler.run(task_id, req);
     EXPECT_EQ(r.status, Status::CANCELLED);
 
@@ -65,10 +65,13 @@ TEST(RestoreSchedulerStubIntegration, DefaultStubsRestoreEmptyArchive) {
     ASSERT_EQ(writer->commit().status, Status::SUCCESS);
 
     TaskManager task_mgr;
-    RestoreScheduler scheduler(task_mgr);
     RestoreRequest req;
     req.archive_path = archive_path;
     req.target_path = restore_tmp.path();
+
+    auto reader = open_archive(archive_path);
+    auto restorer = create_restorer();
+    RestoreScheduler scheduler(task_mgr, *reader, *restorer);
 
     const auto task_id = task_mgr.create_restore_task(req);
     Result result = scheduler.run(task_id, req);
