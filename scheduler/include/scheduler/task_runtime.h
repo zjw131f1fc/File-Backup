@@ -38,6 +38,7 @@ public:
     bool cancel_task(const std::string& task_id);
 
     std::size_t worker_count() const noexcept;
+    std::size_t max_queued_tasks() const noexcept;
     std::size_t queued_task_count() const;
 
 private:

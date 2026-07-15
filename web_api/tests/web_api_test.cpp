@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 #include "web_api/web_api.h"
 #include "../../tests/helpers/temp_dir.h"
+#include <httplib.h>
 #include <nlohmann/json.hpp>
+#include <thread>
 
 using namespace backup;
 using namespace backup::testing;
@@ -94,4 +96,20 @@ TEST(WebApiContract, ExistingOutputReturnsConflict) {
 
     EXPECT_EQ(response.status, 409);
     EXPECT_EQ(response_json(response)["error"]["code"], "OUTPUT_EXISTS");
+}
+
+TEST(WebApiServerContract, ServesHealthOverHttp) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    ApiConfig config;
+    config.port = 0;
+    WebApiServer server(runtime, config);
+
+    ASSERT_TRUE(server.start());
+    httplib::Client client("127.0.0.1", server.port());
+    auto response = client.Get("/api/health");
+    ASSERT_TRUE(response);
+    EXPECT_EQ(response->status, 200);
+    EXPECT_EQ(json::parse(response->body)["service"], "backup-web");
+    server.stop();
 }

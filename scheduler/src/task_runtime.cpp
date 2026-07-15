@@ -225,6 +225,10 @@ std::size_t TaskRuntime::worker_count() const noexcept {
     return impl_->worker_count_value;
 }
 
+std::size_t TaskRuntime::max_queued_tasks() const noexcept {
+    return impl_->max_queued_tasks;
+}
+
 std::size_t TaskRuntime::queued_task_count() const {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     return impl_->queue.size();
