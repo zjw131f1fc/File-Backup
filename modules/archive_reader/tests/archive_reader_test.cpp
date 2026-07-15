@@ -39,6 +39,15 @@ TEST(ArchiveReaderContract, ValidateCorrectArchive) {
     EXPECT_EQ(r.status, Status::SUCCESS);
 }
 
+TEST(ArchiveReaderContract, ValidateMissingArchiveFails) {
+    TempDir tmp;
+    auto reader = open_archive(tmp.path() + "/missing.dat");
+
+    EXPECT_NE(reader, nullptr);
+    Result r = reader->validate();
+    EXPECT_EQ(r.status, Status::FAILED);
+}
+
 // ===== 2. 格式标识错误 =====
 TEST(ArchiveReaderContract, ValidateBadFormat) {
     TempDir tmp;
