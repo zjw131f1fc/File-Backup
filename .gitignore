@@ -1,0 +1,20 @@
+# CMake build output
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+CTestTestfile.cmake
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+
+# Local IDE and assistant configuration
+.claude/
+.vscode/
+.idea/
+
+# Editor and OS files
+*.swp
+*.swo
+.DS_Store
