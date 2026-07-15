@@ -19,7 +19,18 @@ Web 层需要一个 `TaskRuntime`（可以是 Web 服务内部组件，也可以
 3. 调用 `BackupScheduler::run()` 或 `RestoreScheduler::run()`；
 4. 保存终态、发布进度事件并处理取消竞态。
 
-第一版使用单个 worker、FIFO 队列，保证同一进程内一次只执行一个备份或还原任务。任务记录和事件缓冲暂存内存；服务重启后未完成任务视为丢失，旧任务查询返回 `404`。后续需要持久化或并发执行时，必须先补充任务存储和资源限制设计。
+第一版使用可配置的 worker pool。任务进入共享队列，最多同时运行 `worker_count` 个备份或还原任务，其余任务保持 `PENDING`。任务记录和事件缓冲暂存内存；服务重启后未完成任务视为丢失，旧任务查询返回 `404`。
+
+并发运行约束：
+
+- 每个任务创建独立的 Filter、Writer、Reader、Restorer 实例，不跨任务共享非线程安全实例；
+- `TaskManager` 的状态、进度、取消和任务索引操作必须线程安全；
+- 两个备份任务不能使用同一个 `output_path`，冲突时后提交任务返回 `409 OUTPUT_CONFLICT`；
+- 归档写入期间不能有其他任务读取或写入同一个归档文件；
+- 同一个源目录可以被多个只读扫描任务同时使用；
+- worker 数量和队列长度应由服务配置限制，避免并发 I/O 使本机失去响应。
+
+`GET /api/capabilities` 返回当前 `worker_count` 和是否支持并发任务。后续需要动态扩缩容或持久化时，再补充任务存储和资源调度设计。
 
 现有 `TaskManager` 已提供单任务创建、查询、取消、进度更新和完成接口，但还没有任务列表、任务类型、时间戳或事件订阅能力。这些是 Web 运行时需要补充的上层能力，不应让 HTTP 层自行维护另一套状态。
 
@@ -109,7 +120,12 @@ GET /api/capabilities
     "max_size",
     "include_uids"
   ],
-  "progress_events": true
+  "progress_events": true,
+  "concurrency": {
+    "enabled": true,
+    "worker_count": 2,
+    "max_queued_tasks": 32
+  }
 }
 ```
 
@@ -390,6 +406,7 @@ GET /api/filesystem/entries?path=/home/user
 | `INVALID_REQUEST` | 必填字段缺失或类型错误 |
 | `INVALID_PATH` | 路径不存在、不是目录或不可访问 |
 | `OUTPUT_EXISTS` | 备份目标归档已存在 |
+| `OUTPUT_CONFLICT` | 并发任务正在使用相同输出归档 |
 | `PATH_NOT_ALLOWED` | 路径不在服务端允许的根目录内 |
 | `INVALID_FILTER` | 筛选条件之间存在矛盾 |
 | `TASK_NOT_FOUND` | 任务 ID 不存在 |
