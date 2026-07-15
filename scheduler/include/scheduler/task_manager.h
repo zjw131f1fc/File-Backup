@@ -21,6 +21,9 @@ public:
     // 获取任务信息
     Task get_task(const std::string& task_id) const;
 
+    // 将等待中的任务标记为运行中
+    bool start_task(const std::string& task_id);
+
     // 取消任务（仅在 PENDING 或 RUNNING 时生效）
     bool cancel_task(const std::string& task_id);
 
