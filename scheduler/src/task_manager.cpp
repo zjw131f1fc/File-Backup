@@ -49,6 +49,16 @@ Task TaskManager::get_task(const std::string& task_id) const {
     return it->second;
 }
 
+bool TaskManager::start_task(const std::string& task_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = tasks_.find(task_id);
+    if (it == tasks_.end() || it->second.status != TaskStatus::PENDING) {
+        return false;
+    }
+    it->second.status = TaskStatus::RUNNING;
+    return true;
+}
+
 bool TaskManager::cancel_task(const std::string& task_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = tasks_.find(task_id);
@@ -77,6 +87,10 @@ void TaskManager::complete_task(const std::string& task_id, const Result& result
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = tasks_.find(task_id);
     if (it == tasks_.end()) {
+        return;
+    }
+    if (it->second.status == TaskStatus::CANCELLED &&
+        result.status != Status::CANCELLED) {
         return;
     }
     it->second.result = result;
