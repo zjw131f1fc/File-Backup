@@ -35,7 +35,7 @@ TEST(BackupSchedulerContract, FailCallsAbort) {
 
     // commit 不应被调用（StrictMock 会报错如果被调）
 
-    BackupScheduler scheduler(task_mgr, &mock_scanner);
+    BackupScheduler scheduler(task_mgr, &mock_scanner, &mock_writer);
     BackupRequest req;
     req.source_path = "/tmp/src";
     req.output_path = "/tmp/archive.dat";
@@ -68,7 +68,7 @@ TEST(BackupSchedulerContract, SuccessCallsCommit) {
     // abort 不应被调用
     EXPECT_CALL(mock_writer, abort()).Times(0);
 
-    BackupScheduler scheduler(task_mgr, &mock_scanner);
+    BackupScheduler scheduler(task_mgr, &mock_scanner, &mock_writer);
     BackupRequest req;
     req.source_path = "/tmp/src";
     req.output_path = "/tmp/archive.dat";
@@ -96,7 +96,7 @@ TEST(BackupSchedulerContract, CancelStopsScan) {
     EXPECT_CALL(mock_writer, abort())
         .WillOnce(Return(Result{}));
 
-    BackupScheduler scheduler(task_mgr, &mock_scanner);
+    BackupScheduler scheduler(task_mgr, &mock_scanner, &mock_writer);
     BackupRequest req;
     req.source_path = "/tmp/src";
     req.output_path = "/tmp/archive.dat";
