@@ -140,10 +140,29 @@ struct TaskRuntime::Impl {
 
             try {
                 if (job.kind == TaskKind::BACKUP) {
-                    BackupScheduler scheduler(task_manager);
+                    auto scanner = create_scanner();
+                    auto filter = create_filter(job.backup_request.filter_rules);
+                    auto writer = create_archive(job.backup_request.output_path);
+                    if (!scanner || !filter || !writer) {
+                        Result failure;
+                        failure.status = Status::FAILED;
+                        failure.message = "failed to create backup task modules";
+                        task_manager.complete_task(job.task_id, failure);
+                        continue;
+                    }
+                    BackupScheduler scheduler(task_manager, *scanner, *filter, *writer);
                     scheduler.run(job.task_id, job.backup_request);
                 } else {
-                    RestoreScheduler scheduler(task_manager);
+                    auto reader = open_archive(job.restore_request.archive_path);
+                    auto restorer = create_restorer();
+                    if (!reader || !restorer) {
+                        Result failure;
+                        failure.status = Status::FAILED;
+                        failure.message = "failed to create restore task modules";
+                        task_manager.complete_task(job.task_id, failure);
+                        continue;
+                    }
+                    RestoreScheduler scheduler(task_manager, *reader, *restorer);
                     scheduler.run(job.task_id, job.restore_request);
                 }
             } catch (const std::exception& error) {
