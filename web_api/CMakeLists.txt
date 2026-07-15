@@ -10,4 +10,9 @@ target_link_libraries(backup_web_api PUBLIC
     nlohmann_json::nlohmann_json
 )
 
+add_executable(backup_web_server
+    src/main.cpp
+)
+target_link_libraries(backup_web_server PRIVATE backup_web_api)
+
 add_subdirectory(tests)
