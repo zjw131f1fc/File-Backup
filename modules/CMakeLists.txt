@@ -1,0 +1,5 @@
+add_subdirectory(scanner)
+add_subdirectory(filter)
+add_subdirectory(archive_writer)
+add_subdirectory(archive_reader)
+add_subdirectory(restore)
