@@ -335,7 +335,12 @@
     if (!state.apiOnline) return;
     try {
       const data = await api.tasks();
-      state.tasks = (data?.tasks || []).map(task => ({ ...task, progress: task.progress || {}, result: task.result || null }));
+      const summaries = data?.tasks || [];
+      const detailed = await Promise.all(summaries.map(async task => {
+        if (task.progress) return task;
+        try { return await api.task(task.task_id); } catch (_) { return task; }
+      }));
+      state.tasks = detailed.map(task => ({ ...task, progress: task.progress || {}, result: task.result || null }));
       render();
     } catch (error) {
       state.apiOnline = false;
