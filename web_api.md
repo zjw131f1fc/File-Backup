@@ -55,6 +55,7 @@ Web 层需要一个 `TaskRuntime`（可以是 Web 服务内部组件，也可以
 | `404` | 任务或路径不存在 |
 | `409` | 任务当前状态不允许执行该操作 |
 | `422` | 字段格式正确但业务校验失败 |
+| `429` | worker 和等待队列均已达到上限 |
 | `500` | Web 服务内部错误 |
 
 ### 2.2 任务状态转换
@@ -284,7 +285,13 @@ GET /api/tasks?type=backup&limit=20
       "task_id": "task_1_123456",
       "type": "backup",
       "status": "SUCCESS",
-      "message": "backup completed successfully"
+      "message": "backup completed successfully",
+      "progress": {
+        "stage": "completed",
+        "processed_entries": 42,
+        "processed_bytes": 4096,
+        "current_path": "/home/user/data"
+      }
     }
   ]
 }
@@ -407,6 +414,7 @@ GET /api/filesystem/entries?path=/home/user
 | `INVALID_PATH` | 路径不存在、不是目录或不可访问 |
 | `OUTPUT_EXISTS` | 备份目标归档已存在 |
 | `OUTPUT_CONFLICT` | 并发任务正在使用相同输出归档 |
+| `QUEUE_FULL` | worker 和等待队列均已达到上限 |
 | `PATH_NOT_ALLOWED` | 路径不在服务端允许的根目录内 |
 | `INVALID_FILTER` | 筛选条件之间存在矛盾 |
 | `TASK_NOT_FOUND` | 任务 ID 不存在 |
