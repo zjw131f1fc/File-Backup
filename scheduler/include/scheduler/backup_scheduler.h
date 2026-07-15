@@ -15,7 +15,8 @@ class BackupScheduler {
 public:
     explicit BackupScheduler(
         TaskManager& task_manager,
-        IScanner* scanner = nullptr
+        IScanner* scanner = nullptr,
+        IArchiveWriter* archive_writer = nullptr
     );
 
     // 执行备份任务
@@ -25,6 +26,7 @@ private:
     TaskManager& task_manager_;
     std::unique_ptr<IScanner> default_scanner_;
     IScanner* scanner_;
+    IArchiveWriter* archive_writer_;
 };
 
 }  // namespace backup

@@ -7,9 +7,11 @@ namespace backup {
 
 BackupScheduler::BackupScheduler(
     TaskManager& task_manager,
-    IScanner* scanner
+    IScanner* scanner,
+    IArchiveWriter* archive_writer
 )
     : task_manager_(task_manager)
+    , archive_writer_(archive_writer)
 {
     if (!scanner) {
         default_scanner_ = create_scanner();
@@ -39,8 +41,13 @@ Result BackupScheduler::run(const std::string& task_id, const BackupRequest& req
         task_manager_.update_progress(task_id, p);
     }
 
-    // 创建归档写入器
-    auto writer = create_archive(request.output_path);
+    // 创建归档写入器；测试或上层可注入实现，默认使用工厂实例。
+    std::unique_ptr<IArchiveWriter> default_writer;
+    IArchiveWriter* writer = archive_writer_;
+    if (!writer) {
+        default_writer = create_archive(request.output_path);
+        writer = default_writer.get();
+    }
 
     if (!writer) {
         Result r;
