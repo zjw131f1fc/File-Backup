@@ -213,19 +213,18 @@ public:
     }
 
     std::unique_ptr<std::istream> open_content(const EntryInfo& entry_info) override {
-        // 根据 path 查找条目
         for (const auto& ce : entries_) {
             if (ce.info.path == entry_info.path) {
-                if (ce.info.type != EntryType::REGULAR_FILE || ce.content_len == 0) {
+                if (ce.info.type != EntryType::REGULAR_FILE) {
                     return nullptr;
                 }
-                // 打开文件并 seek 到 content 位置
+                if (ce.content_len == 0) {
+                    return std::make_unique<std::istringstream>();
+                }
                 auto ifs = std::make_unique<std::ifstream>(archive_path_, std::ios::binary);
                 if (!ifs || !ifs->seekg(ce.content_offset)) {
                     return nullptr;
                 }
-                // 返回一个只包含 content_len 字节的流
-                // 使用 stringstream 读取指定长度的内容
                 std::string data(ce.content_len, '\0');
                 ifs->read(&data[0], ce.content_len);
                 if (!*ifs) return nullptr;
