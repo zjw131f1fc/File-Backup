@@ -33,6 +33,20 @@ ApiResponse error_response(int status,
     }} });
 }
 
+ApiResponse submission_error_response(const TaskSubmission& submission) {
+    int status = 500;
+    if (submission.error_code == "OUTPUT_CONFLICT") {
+        status = 409;
+    } else if (submission.error_code == "QUEUE_FULL") {
+        status = 429;
+    } else if (submission.error_code == "RUNTIME_STOPPED") {
+        status = 503;
+    }
+    const std::string code = submission.error_code.empty()
+        ? "TASK_SUBMISSION_FAILED" : submission.error_code;
+    return error_response(status, code, submission.result.message);
+}
+
 bool is_directory(const std::string& path) {
     std::error_code error;
     return std::filesystem::is_directory(
@@ -514,10 +528,7 @@ ApiResponse WebApi::handle(const std::string& method,
         }
         const TaskSubmission submission = runtime_.submit_backup(backup);
         if (!submission.accepted()) {
-            const int status = submission.error_code == "OUTPUT_CONFLICT" ? 409 : 429;
-            const std::string code = submission.error_code.empty()
-                ? "QUEUE_FULL" : submission.error_code;
-            return error_response(status, code, submission.result.message);
+            return submission_error_response(submission);
         }
         return json_response(202, {
             {"task_id", submission.task_id},
@@ -544,10 +555,7 @@ ApiResponse WebApi::handle(const std::string& method,
     }
     const TaskSubmission submission = runtime_.submit_restore(restore);
     if (!submission.accepted()) {
-        const int status = submission.error_code == "OUTPUT_CONFLICT" ? 409 : 429;
-        const std::string code = submission.error_code.empty()
-            ? "QUEUE_FULL" : submission.error_code;
-        return error_response(status, code, submission.result.message);
+        return submission_error_response(submission);
     }
     return json_response(202, {
         {"task_id", submission.task_id},
@@ -565,6 +573,50 @@ void WebApi::mount(httplib::Server& server) {
             response.set_header("Access-Control-Allow-Origin", config_.allowed_origin);
         }
     };
+    server.Get(R"(/api/tasks/([^/]+)/events)", [this](const httplib::Request& request,
+                                                        httplib::Response& response) {
+        const std::string task_id = url_decode(request.matches[1].str());
+        if (runtime_.get_task(task_id).task_id.empty()) {
+            const ApiResponse result = error_response(404, "TASK_NOT_FOUND", "task not found");
+            response.status = result.status;
+            response.set_content(result.body, result.content_type);
+            return;
+        }
+
+        uint64_t after_id = 0;
+        const std::string last_event_id = request.get_header_value("Last-Event-ID");
+        if (!last_event_id.empty()) {
+            try { after_id = std::stoull(last_event_id); }
+            catch (const std::exception&) { after_id = 0; }
+        }
+        response.set_chunked_content_provider(
+            "text/event-stream; charset=utf-8",
+            [this, task_id, after_id](size_t, httplib::DataSink& sink) mutable {
+                for (int attempt = 0; attempt < 600 && sink.is_writable(); ++attempt) {
+                    for (const auto& event : runtime_.get_events(task_id, after_id)) {
+                        std::ostringstream stream;
+                        stream << "event: " << event.type << "\n"
+                               << "id: " << event.id << "\n"
+                               << "data: " << task_json(event.task).dump() << "\n\n";
+                        const std::string payload = stream.str();
+                        sink.write(payload.data(), payload.size());
+                        after_id = event.id;
+                    }
+                    const auto task = runtime_.get_task(task_id);
+                    const bool terminal = task.status == TaskStatus::SUCCESS ||
+                        task.status == TaskStatus::PARTIAL_SUCCESS ||
+                        task.status == TaskStatus::FAILED ||
+                        task.status == TaskStatus::CANCELLED;
+                    if (terminal && runtime_.get_events(task_id, after_id).empty()) {
+                        sink.done();
+                        return true;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                sink.done();
+                return true;
+            });
+    });
     server.Get(R"(/api/.*)", callback);
     server.Post(R"(/api/.*)", callback);
     server.Options(R"(/api/.*)", [this](const httplib::Request&, httplib::Response& response) {
@@ -603,8 +655,13 @@ bool WebApiServer::start() {
     if (impl_->started) return true;
     impl_->runtime.start();
     impl_->api.mount(impl_->server);
-    impl_->bound_port = impl_->server.bind_to_any_port(
-        impl_->config.bind_address, impl_->config.port);
+    if (impl_->config.port == 0) {
+        impl_->bound_port = impl_->server.bind_to_any_port(impl_->config.bind_address);
+    } else if (impl_->server.bind_to_port(impl_->config.bind_address, impl_->config.port)) {
+        impl_->bound_port = impl_->config.port;
+    } else {
+        impl_->bound_port = 0;
+    }
     if (impl_->bound_port <= 0) {
         impl_->runtime.shutdown();
         return false;

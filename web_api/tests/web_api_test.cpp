@@ -99,6 +99,26 @@ TEST(WebApiContract, ExistingOutputReturnsConflict) {
     EXPECT_EQ(response_json(response)["error"]["code"], "OUTPUT_EXISTS");
 }
 
+TEST(WebApiContract, StoppedRuntimeReturnsServiceUnavailable) {
+    TempDir temp;
+    const std::string source = temp.create_dir("source");
+    const std::string output = temp.path() + "/backup.dat";
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    runtime.shutdown();
+    WebApi api(runtime);
+
+    const ApiResponse response = api.handle(
+        "POST", "/api/backup", json{
+            {"source_path", source},
+            {"output_path", output},
+            {"filter_rules", json::object()}
+        }.dump());
+
+    EXPECT_EQ(response.status, 503);
+    EXPECT_EQ(response_json(response)["error"]["code"], "RUNTIME_STOPPED");
+}
+
 TEST(WebApiServerContract, ServesHealthOverHttp) {
     TaskManager task_manager;
     TaskRuntime runtime(task_manager, 1, 4);
@@ -112,6 +132,36 @@ TEST(WebApiServerContract, ServesHealthOverHttp) {
     ASSERT_TRUE(response);
     EXPECT_EQ(response->status, 200);
     EXPECT_EQ(json::parse(response->body)["service"], "backup-web");
+    server.stop();
+}
+
+TEST(WebApiServerContract, StreamsTaskEventsOverHttp) {
+    TempDir temp;
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    ApiConfig config;
+    config.port = 0;
+    WebApiServer server(runtime, config);
+    ASSERT_TRUE(server.start());
+
+    httplib::Client client("127.0.0.1", server.port());
+    const auto post = client.Post(
+        "/api/backup",
+        json{
+            {"source_path", temp.create_dir("source")},
+            {"output_path", temp.path() + "/archive.dat"},
+            {"filter_rules", json::object()}
+        }.dump(),
+        "application/json");
+    ASSERT_TRUE(post);
+    ASSERT_EQ(post->status, 202);
+    const std::string task_id = json::parse(post->body)["task_id"];
+
+    httplib::Client events_client("127.0.0.1", server.port());
+    const auto events = events_client.Get("/api/tasks/" + task_id + "/events");
+    ASSERT_TRUE(events) << "HTTP error: " << static_cast<int>(events.error());
+    EXPECT_EQ(events->status, 200);
+    EXPECT_NE(events->body.find("event: status"), std::string::npos);
     server.stop();
 }
 
