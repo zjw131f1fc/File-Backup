@@ -367,3 +367,14 @@ TEST(RestorerContract, RestoreMetadata) {
     EXPECT_EQ(stat(target.c_str(), &st), 0);
     EXPECT_EQ(st.st_mode & 0777, 0755u);
 }
+
+TEST(RestorerContract, RestoreMetadataMissingTargetFails) {
+    TempDir restore_tmp;
+    auto restorer = create_restorer();
+
+    EntryInfo meta;
+    Result r = restorer->restore_metadata(
+        restore_tmp.path() + "/missing", meta);
+
+    EXPECT_EQ(r.status, Status::FAILED);
+}
