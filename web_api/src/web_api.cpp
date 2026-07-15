@@ -8,6 +8,7 @@
 #include <fstream>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sstream>
 #include <thread>
 #include <unistd.h>
 #include <utility>
@@ -204,6 +205,124 @@ bool parse_conflict_policy(const std::string& value, ConflictPolicy& policy) {
     return true;
 }
 
+std::string url_decode(const std::string& value) {
+    std::string result;
+    result.reserve(value.size());
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        if (value[index] == '%' && index + 2 < value.size()) {
+            const auto hex = [](char character) -> int {
+                if (character >= '0' && character <= '9') return character - '0';
+                if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+                if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+                return -1;
+            };
+            const int high = hex(value[index + 1]);
+            const int low = hex(value[index + 2]);
+            if (high >= 0 && low >= 0) {
+                result.push_back(static_cast<char>((high << 4) | low));
+                index += 2;
+                continue;
+            }
+        }
+        result.push_back(value[index] == '+' ? ' ' : value[index]);
+    }
+    return result;
+}
+
+std::string query_value(const std::string& query, const std::string& key) {
+    std::size_t start = 0;
+    while (start <= query.size()) {
+        const auto end = query.find('&', start);
+        const auto part = query.substr(start, end == std::string::npos ? end : end - start);
+        const auto separator = part.find('=');
+        if (separator != std::string::npos &&
+            url_decode(part.substr(0, separator)) == key) {
+            return url_decode(part.substr(separator + 1));
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return {};
+}
+
+std::string task_status_name(TaskStatus status) {
+    switch (status) {
+        case TaskStatus::PENDING: return "PENDING";
+        case TaskStatus::RUNNING: return "RUNNING";
+        case TaskStatus::SUCCESS: return "SUCCESS";
+        case TaskStatus::PARTIAL_SUCCESS: return "PARTIAL_SUCCESS";
+        case TaskStatus::FAILED: return "FAILED";
+        case TaskStatus::CANCELLED: return "CANCELLED";
+    }
+    return "FAILED";
+}
+
+json task_json(const Task& task) {
+    json result = nullptr;
+    if (task.status != TaskStatus::PENDING && task.status != TaskStatus::RUNNING) {
+        result = {
+            {"status", task_status_name(task.result.status == Status::SUCCESS
+                ? TaskStatus::SUCCESS
+                : task.result.status == Status::PARTIAL_SUCCESS
+                    ? TaskStatus::PARTIAL_SUCCESS
+                    : task.result.status == Status::CANCELLED
+                        ? TaskStatus::CANCELLED : TaskStatus::FAILED)},
+            {"message", task.result.message},
+            {"error_count", task.result.error_count},
+            {"warning_count", task.result.warning_count}
+        };
+    }
+    return {
+        {"task_id", task.task_id},
+        {"status", task_status_name(task.status)},
+        {"progress", {
+            {"stage", task.progress.stage},
+            {"processed_entries", task.progress.processed_entries},
+            {"processed_bytes", task.progress.processed_bytes},
+            {"current_path", task.progress.current_path}
+        }},
+        {"result", result}
+    };
+}
+
+json snapshot_json(const TaskSnapshot& snapshot) {
+    auto result = task_json(snapshot.task);
+    result["type"] = snapshot.type;
+    result["created_at"] = snapshot.created_at;
+    result["started_at"] = snapshot.started_at.empty()
+        ? json(nullptr) : json(snapshot.started_at);
+    result["finished_at"] = snapshot.finished_at.empty()
+        ? json(nullptr) : json(snapshot.finished_at);
+    return result;
+}
+
+bool is_allowed_path(const std::filesystem::path& path,
+                     const std::vector<std::string>& roots) {
+    const auto normalized = normalized_path(path);
+    for (const auto& root : roots) {
+        const auto normalized_root = normalized_path(root);
+        if (normalized == normalized_root || is_inside(normalized, normalized_root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+json filesystem_entry_json(const std::filesystem::directory_entry& entry) {
+    std::error_code error;
+    const auto status = entry.symlink_status(error);
+    json result = {
+        {"name", entry.path().filename().string()},
+        {"path", entry.path().string()},
+        {"type", std::filesystem::is_directory(status) ? "directory" :
+            std::filesystem::is_regular_file(status) ? "regular_file" : "other"}
+    };
+    if (!error && std::filesystem::is_regular_file(status)) {
+        result["size"] = entry.file_size(error);
+    }
+    return result;
+}
+
 }  // namespace
 
 WebApi::WebApi(TaskRuntime& runtime, ApiConfig config)
@@ -218,6 +337,8 @@ ApiResponse WebApi::handle(const std::string& method,
                            const std::string& body) {
     const auto query_position = target.find('?');
     const std::string path = target.substr(0, query_position);
+    const std::string query = query_position == std::string::npos
+        ? std::string() : target.substr(query_position + 1);
 
     if (method == "GET" && path == "/api/health") {
         return json_response(200, {{"status", "ok"}, {"service", "backup-web"}});
@@ -243,6 +364,118 @@ ApiResponse WebApi::handle(const std::string& method,
                 {"max_queued_tasks", runtime_.max_queued_tasks()}
             }}
         });
+    }
+
+    if (method == "GET" && path == "/api/tasks") {
+        std::string status_filter = query_value(query, "status");
+        std::string type_filter = query_value(query, "type");
+        std::size_t limit = 20;
+        const std::string limit_value = query_value(query, "limit");
+        if (!limit_value.empty()) {
+            try {
+                limit = std::stoul(limit_value);
+            } catch (const std::exception&) {
+                return error_response(400, "INVALID_REQUEST", "limit must be an integer");
+            }
+        }
+        if (limit == 0 || limit > 100) {
+            return error_response(400, "INVALID_REQUEST", "limit must be between 1 and 100");
+        }
+        json tasks = json::array();
+        for (const auto& snapshot : runtime_.list_tasks()) {
+            if ((!status_filter.empty() && task_status_name(snapshot.task.status) != status_filter) ||
+                (!type_filter.empty() && snapshot.type != type_filter)) {
+                continue;
+            }
+            tasks.push_back(snapshot_json(snapshot));
+            if (tasks.size() >= limit) break;
+        }
+        return json_response(200, {{"tasks", tasks}});
+    }
+
+    if (method == "GET" && path == "/api/filesystem/roots") {
+        json roots = json::array();
+        for (const auto& root : config_.allowed_roots) {
+            roots.push_back({
+                {"path", normalized_path(root).string()},
+                {"name", std::filesystem::path(root).filename().string()},
+                {"type", "directory"}
+            });
+        }
+        return json_response(200, {{"roots", roots}});
+    }
+
+    if (method == "GET" && path == "/api/filesystem/entries") {
+        const std::string requested_path = query_value(query, "path");
+        if (requested_path.empty()) {
+            return error_response(400, "INVALID_REQUEST", "path is required");
+        }
+        if (!is_allowed_path(requested_path, config_.allowed_roots)) {
+            return error_response(403, "PATH_NOT_ALLOWED", "path is outside allowed roots");
+        }
+        if (!is_directory(requested_path)) {
+            return error_response(404, "INVALID_PATH", "path must be a directory");
+        }
+        std::error_code error;
+        json entries = json::array();
+        for (const auto& entry : std::filesystem::directory_iterator(requested_path, error)) {
+            if (error) break;
+            entries.push_back(filesystem_entry_json(entry));
+        }
+        if (error) {
+            return error_response(422, "INVALID_PATH", "directory cannot be read");
+        }
+        std::sort(entries.begin(), entries.end(), [](const json& left, const json& right) {
+            return left["name"].get<std::string>() < right["name"].get<std::string>();
+        });
+        return json_response(200, {{"path", normalized_path(requested_path).string()}, {"entries", entries}});
+    }
+
+    if (method == "GET" && path.rfind("/api/tasks/", 0) == 0) {
+        const std::string suffix = path.substr(std::string("/api/tasks/").size());
+        if (suffix.size() > 7 && suffix.compare(suffix.size() - 7, 7, "/events") == 0) {
+            const std::string task_id = url_decode(suffix.substr(0, suffix.size() - 7));
+            if (runtime_.get_task(task_id).task_id.empty()) {
+                return error_response(404, "TASK_NOT_FOUND", "task not found");
+            }
+            std::size_t after_id = 0;
+            const std::string after_value = query_value(query, "after");
+            if (!after_value.empty()) {
+                try { after_id = std::stoull(after_value); }
+                catch (const std::exception&) {
+                    return error_response(400, "INVALID_REQUEST", "after must be an integer");
+                }
+            }
+            std::ostringstream stream;
+            for (const auto& event : runtime_.get_events(task_id, after_id)) {
+                stream << "event: " << event.type << "\n"
+                       << "id: " << event.id << "\n"
+                       << "data: " << task_json(event.task).dump() << "\n\n";
+            }
+            return {200, "text/event-stream; charset=utf-8", stream.str()};
+        }
+        const std::string task_id = url_decode(suffix);
+        for (const auto& snapshot : runtime_.list_tasks()) {
+            if (snapshot.task.task_id == task_id) {
+                return json_response(200, snapshot_json(snapshot));
+            }
+        }
+        return error_response(404, "TASK_NOT_FOUND", "task not found");
+    }
+
+    if (method == "POST" && path.rfind("/api/tasks/", 0) == 0 &&
+        path.size() > 7 && path.compare(path.size() - 7, 7, "/cancel") == 0) {
+        const std::string task_id = url_decode(path.substr(
+            std::string("/api/tasks/").size(),
+            path.size() - std::string("/api/tasks/").size() - 7));
+        const Task before = runtime_.get_task(task_id);
+        if (before.task_id.empty()) {
+            return error_response(404, "TASK_NOT_FOUND", "task not found");
+        }
+        if (!runtime_.cancel_task(task_id)) {
+            return error_response(409, "TASK_CONFLICT", "task cannot be cancelled in its current state");
+        }
+        return json_response(200, {{"task_id", task_id}, {"status", "CANCELLED"}});
     }
 
     if (method != "POST" || (path != "/api/backup" && path != "/api/restore")) {
@@ -281,7 +514,10 @@ ApiResponse WebApi::handle(const std::string& method,
         }
         const TaskSubmission submission = runtime_.submit_backup(backup);
         if (!submission.accepted()) {
-            return error_response(429, "QUEUE_FULL", submission.result.message);
+            const int status = submission.error_code == "OUTPUT_CONFLICT" ? 409 : 429;
+            const std::string code = submission.error_code.empty()
+                ? "QUEUE_FULL" : submission.error_code;
+            return error_response(status, code, submission.result.message);
         }
         return json_response(202, {
             {"task_id", submission.task_id},
@@ -308,7 +544,10 @@ ApiResponse WebApi::handle(const std::string& method,
     }
     const TaskSubmission submission = runtime_.submit_restore(restore);
     if (!submission.accepted()) {
-        return error_response(429, "QUEUE_FULL", submission.result.message);
+        const int status = submission.error_code == "OUTPUT_CONFLICT" ? 409 : 429;
+        const std::string code = submission.error_code.empty()
+            ? "QUEUE_FULL" : submission.error_code;
+        return error_response(status, code, submission.result.message);
     }
     return json_response(202, {
         {"task_id", submission.task_id},

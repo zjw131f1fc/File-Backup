@@ -101,3 +101,54 @@ TEST(TaskRuntime, RejectsSubmissionAfterShutdown) {
     EXPECT_EQ(submission.result.status, Status::FAILED);
 }
 
+TEST(TaskRuntime, ListsTaskMetadata) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+    ASSERT_TRUE(runtime.submit_backup(request).accepted());
+
+    const auto tasks = runtime.list_tasks();
+    ASSERT_EQ(tasks.size(), 1u);
+    EXPECT_EQ(tasks.front().type, "backup");
+    EXPECT_EQ(tasks.front().task.status, TaskStatus::PENDING);
+    EXPECT_FALSE(tasks.front().created_at.empty());
+}
+
+TEST(TaskRuntime, RejectsDuplicateBackupOutput) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+    ASSERT_TRUE(runtime.submit_backup(request).accepted());
+
+    const TaskSubmission rejected = runtime.submit_backup(request);
+    EXPECT_FALSE(rejected.accepted());
+    EXPECT_EQ(rejected.error_code, "OUTPUT_CONFLICT");
+}
+
+TEST(TaskRuntime, CapturesTaskEvents) {
+    TempDir tmp;
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    runtime.start();
+
+    BackupRequest request;
+    request.source_path = tmp.create_dir("source");
+    request.output_path = tmp.path() + "/archive.dat";
+    const TaskSubmission submission = runtime.submit_backup(request);
+    ASSERT_TRUE(submission.accepted());
+    wait_for_terminal(task_manager, submission.task_id);
+
+    const auto events = runtime.get_events(submission.task_id);
+    ASSERT_FALSE(events.empty());
+    for (std::size_t index = 1; index < events.size(); ++index) {
+        EXPECT_LT(events[index - 1].id, events[index].id);
+    }
+    EXPECT_EQ(events.back().task.status, TaskStatus::SUCCESS);
+    runtime.shutdown();
+}

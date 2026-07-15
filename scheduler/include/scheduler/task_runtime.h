@@ -8,14 +8,31 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace backup {
 
 struct TaskSubmission {
     std::string task_id;
+    std::string error_code;
     Result result;
 
     bool accepted() const { return !task_id.empty() && result.ok(); }
+};
+
+struct TaskSnapshot {
+    Task task;
+    std::string type;
+    std::string created_at;
+    std::string started_at;
+    std::string finished_at;
+};
+
+struct TaskEvent {
+    uint64_t id = 0;
+    std::string task_id;
+    std::string type;
+    Task task;
 };
 
 class TaskRuntime {
@@ -35,6 +52,9 @@ public:
     TaskSubmission submit_restore(const RestoreRequest& request);
 
     Task get_task(const std::string& task_id) const;
+    std::vector<TaskSnapshot> list_tasks() const;
+    std::vector<TaskEvent> get_events(const std::string& task_id,
+                                      uint64_t after_id = 0) const;
     bool cancel_task(const std::string& task_id);
 
     std::size_t worker_count() const noexcept;

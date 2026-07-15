@@ -2,11 +2,16 @@
 #include "scheduler/backup_scheduler.h"
 #include "scheduler/restore_scheduler.h"
 #include <condition_variable>
+#include <chrono>
+#include <ctime>
 #include <deque>
 #include <exception>
+#include <iomanip>
 #include <mutex>
 #include <stdexcept>
+#include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -14,11 +19,22 @@ namespace backup {
 
 namespace {
 
-TaskSubmission failed_submission(const std::string& message) {
+TaskSubmission failed_submission(const std::string& code, const std::string& message) {
     TaskSubmission submission;
+    submission.error_code = code;
     submission.result.status = Status::FAILED;
     submission.result.message = message;
     return submission;
+}
+
+std::string timestamp_now() {
+    const auto now = std::chrono::system_clock::now();
+    const auto time = std::chrono::system_clock::to_time_t(now);
+    std::tm utc {};
+    gmtime_r(&time, &utc);
+    std::ostringstream output;
+    output << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
+    return output.str();
 }
 
 }  // namespace
@@ -36,6 +52,14 @@ struct TaskRuntime::Impl {
         RestoreRequest restore_request;
     };
 
+    struct Metadata {
+        std::string type;
+        std::string output_path;
+        std::string created_at;
+        std::string started_at;
+        std::string finished_at;
+    };
+
     Impl(TaskManager& manager, std::size_t workers, std::size_t max_queue)
         : task_manager(manager)
         , worker_count_value(workers)
@@ -46,10 +70,15 @@ struct TaskRuntime::Impl {
         if (max_queued_tasks == 0) {
             throw std::invalid_argument("max_queued_tasks must be greater than zero");
         }
+        task_manager.set_observer(
+            [this](const std::string& task_id, const Task& task, const std::string& change) {
+                record_event(task_id, task, change);
+            });
     }
 
     ~Impl() {
         shutdown();
+        task_manager.set_observer({});
     }
 
     void start() {
@@ -67,6 +96,7 @@ struct TaskRuntime::Impl {
     }
 
     void shutdown() {
+        std::vector<std::string> cancelled_tasks;
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (stopping && workers.empty()) {
@@ -74,9 +104,12 @@ struct TaskRuntime::Impl {
             }
             stopping = true;
             while (!queue.empty()) {
-                task_manager.cancel_task(queue.front().task_id);
+                cancelled_tasks.push_back(queue.front().task_id);
                 queue.pop_front();
             }
+        }
+        for (const auto& task_id : cancelled_tasks) {
+            task_manager.cancel_task(task_id);
         }
         condition.notify_all();
 
@@ -99,10 +132,23 @@ struct TaskRuntime::Impl {
     TaskSubmission submit(Job job) {
         std::lock_guard<std::mutex> lock(mutex);
         if (stopping) {
-            return failed_submission("task runtime is shutting down");
+            return failed_submission("RUNTIME_STOPPED", "task runtime is shutting down");
         }
         if (queue.size() >= max_queued_tasks) {
-            return failed_submission("task queue is full");
+            return failed_submission("QUEUE_FULL", "task queue is full");
+        }
+
+        if (job.kind == TaskKind::BACKUP && !job.backup_request.output_path.empty()) {
+            for (const auto& item : metadata) {
+                if (item.second.type != "backup" ||
+                    item.second.output_path != job.backup_request.output_path) {
+                    continue;
+                }
+                const Task task = task_manager.get_task(item.first);
+                if (task.status == TaskStatus::PENDING || task.status == TaskStatus::RUNNING) {
+                    return failed_submission("OUTPUT_CONFLICT", "output archive is already in use");
+                }
+            }
         }
 
         if (job.kind == TaskKind::BACKUP) {
@@ -111,7 +157,14 @@ struct TaskRuntime::Impl {
             job.task_id = task_manager.create_restore_task(job.restore_request);
         }
         const std::string submission_task_id = job.task_id;
+        Metadata task_metadata;
+        task_metadata.type = job.kind == TaskKind::BACKUP ? "backup" : "restore";
+        task_metadata.output_path = job.backup_request.output_path;
+        task_metadata.created_at = timestamp_now();
+        metadata.emplace(submission_task_id, task_metadata);
+        order.push_back(submission_task_id);
         queue.push_back(std::move(job));
+        record_event_locked(submission_task_id, task_manager.get_task(submission_task_id), "status");
         condition.notify_one();
 
         TaskSubmission submission;
@@ -119,6 +172,59 @@ struct TaskRuntime::Impl {
         submission.result.status = Status::SUCCESS;
         submission.result.message = "task accepted";
         return submission;
+    }
+
+    void record_event_locked(const std::string& task_id,
+                             const Task& task,
+                             const std::string& change) {
+        auto metadata_it = metadata.find(task_id);
+        if (metadata_it == metadata.end()) return;
+        if (task.status == TaskStatus::RUNNING && metadata_it->second.started_at.empty()) {
+            metadata_it->second.started_at = timestamp_now();
+        }
+        if (task.status == TaskStatus::SUCCESS ||
+            task.status == TaskStatus::PARTIAL_SUCCESS ||
+            task.status == TaskStatus::FAILED ||
+            task.status == TaskStatus::CANCELLED) {
+            if (metadata_it->second.finished_at.empty()) {
+                metadata_it->second.finished_at = timestamp_now();
+            }
+        }
+        events[task_id].push_back(TaskEvent{next_event_id++, task_id, change, task});
+    }
+
+    void record_event(const std::string& task_id,
+                      const Task& task,
+                      const std::string& change) {
+        std::lock_guard<std::mutex> lock(mutex);
+        record_event_locked(task_id, task, change);
+    }
+
+    std::vector<TaskSnapshot> list_tasks() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        std::vector<TaskSnapshot> result;
+        result.reserve(order.size());
+        for (const auto& task_id : order) {
+            const auto metadata_it = metadata.find(task_id);
+            if (metadata_it == metadata.end()) continue;
+            const auto& item = metadata_it->second;
+            result.push_back(TaskSnapshot{
+                task_manager.get_task(task_id), item.type, item.created_at,
+                item.started_at, item.finished_at
+            });
+        }
+        return result;
+    }
+
+    std::vector<TaskEvent> get_events(const std::string& task_id, uint64_t after_id) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        std::vector<TaskEvent> result;
+        const auto it = events.find(task_id);
+        if (it == events.end()) return result;
+        for (const auto& event : it->second) {
+            if (event.id > after_id) result.push_back(event);
+        }
+        return result;
     }
 
     void worker_loop() {
@@ -186,6 +292,10 @@ struct TaskRuntime::Impl {
     std::condition_variable condition;
     std::deque<Job> queue;
     std::vector<std::thread> workers;
+    std::unordered_map<std::string, Metadata> metadata;
+    std::vector<std::string> order;
+    std::unordered_map<std::string, std::vector<TaskEvent>> events;
+    uint64_t next_event_id = 1;
     bool started = false;
     bool stopping = false;
 };
@@ -215,6 +325,15 @@ TaskSubmission TaskRuntime::submit_restore(const RestoreRequest& request) {
 
 Task TaskRuntime::get_task(const std::string& task_id) const {
     return impl_->task_manager.get_task(task_id);
+}
+
+std::vector<TaskSnapshot> TaskRuntime::list_tasks() const {
+    return impl_->list_tasks();
+}
+
+std::vector<TaskEvent> TaskRuntime::get_events(const std::string& task_id,
+                                               uint64_t after_id) const {
+    return impl_->get_events(task_id, after_id);
 }
 
 bool TaskRuntime::cancel_task(const std::string& task_id) {

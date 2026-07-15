@@ -3,6 +3,7 @@
 #include "../../tests/helpers/temp_dir.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
+#include <chrono>
 #include <thread>
 
 using namespace backup;
@@ -112,4 +113,102 @@ TEST(WebApiServerContract, ServesHealthOverHttp) {
     EXPECT_EQ(response->status, 200);
     EXPECT_EQ(json::parse(response->body)["service"], "backup-web");
     server.stop();
+}
+
+TEST(WebApiContract, ListsAndReadsTasks) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+    const auto submission = runtime.submit_backup(request);
+    ASSERT_TRUE(submission.accepted());
+    WebApi api(runtime);
+
+    const auto list_response = api.handle("GET", "/api/tasks");
+    const json list_body = response_json(list_response);
+    ASSERT_EQ(list_response.status, 200);
+    ASSERT_EQ(list_body["tasks"].size(), 1u);
+    EXPECT_EQ(list_body["tasks"][0]["task_id"], submission.task_id);
+    EXPECT_EQ(list_body["tasks"][0]["type"], "backup");
+
+    const auto detail_response = api.handle(
+        "GET", "/api/tasks/" + submission.task_id);
+    EXPECT_EQ(detail_response.status, 200);
+    EXPECT_EQ(response_json(detail_response)["task_id"], submission.task_id);
+}
+
+TEST(WebApiContract, CancelsPendingTask) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+    const auto submission = runtime.submit_backup(request);
+    ASSERT_TRUE(submission.accepted());
+    WebApi api(runtime);
+
+    const auto response = api.handle(
+        "POST", "/api/tasks/" + submission.task_id + "/cancel", "{}");
+
+    EXPECT_EQ(response.status, 200);
+    EXPECT_EQ(response_json(response)["status"], "CANCELLED");
+}
+
+TEST(WebApiContract, ListsOnlyAllowedFilesystemEntries) {
+    TempDir temp;
+    temp.create_file("data.txt", "data");
+    temp.create_dir("nested");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    ApiConfig config;
+    config.allowed_roots = {temp.path()};
+    WebApi api(runtime, config);
+
+    const auto response = api.handle(
+        "GET", "/api/filesystem/entries?path=" + temp.path());
+    const json body = response_json(response);
+
+    ASSERT_EQ(response.status, 200);
+    EXPECT_EQ(body["path"], temp.path());
+    ASSERT_EQ(body["entries"].size(), 2u);
+}
+
+TEST(WebApiContract, RejectsFilesystemPathOutsideAllowedRoots) {
+    TempDir temp;
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    ApiConfig config;
+    config.allowed_roots = {temp.path()};
+    WebApi api(runtime, config);
+
+    const auto response = api.handle("GET", "/api/filesystem/entries?path=/tmp");
+
+    EXPECT_EQ(response.status, 403);
+    EXPECT_EQ(response_json(response)["error"]["code"], "PATH_NOT_ALLOWED");
+}
+
+TEST(WebApiContract, ReturnsTaskEventsAsSse) {
+    TempDir temp;
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    runtime.start();
+    WebApi api(runtime);
+    BackupRequest request;
+    request.source_path = temp.create_dir("source");
+    request.output_path = temp.path() + "/archive.dat";
+    const auto submission = runtime.submit_backup(request);
+    ASSERT_TRUE(submission.accepted());
+
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        if (task_manager.get_task(submission.task_id).status == TaskStatus::SUCCESS) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const auto response = api.handle(
+        "GET", "/api/tasks/" + submission.task_id + "/events");
+
+    EXPECT_EQ(response.status, 200);
+    EXPECT_EQ(response.content_type, "text/event-stream; charset=utf-8");
+    EXPECT_NE(response.body.find("event: status"), std::string::npos);
+    runtime.shutdown();
 }
