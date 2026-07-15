@@ -1,5 +1,6 @@
 add_library(backup_scheduler_lib
     src/task_manager.cpp
+    src/task_runtime.cpp
     src/backup_scheduler.cpp
     src/restore_scheduler.cpp
 )
