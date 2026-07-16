@@ -7,7 +7,9 @@
 #include "modules/scanner/scanner.h"
 #include "../../tests/helpers/temp_dir.h"
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 
@@ -122,6 +124,49 @@ TEST(TaskRuntime, ConvertsFactoryExceptionToTaskFailure) {
 
     EXPECT_EQ(task.status, TaskStatus::FAILED);
     EXPECT_NE(task.result.message.find("factory failed"), std::string::npos);
+    runtime.shutdown();
+}
+
+TEST(TaskRuntime, SkipsQueuedTaskCancelledBeforeWorkerStartsIt) {
+    TaskManager task_manager;
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool factory_entered = false;
+    bool release_factory = false;
+    TaskRuntimeFactories factories;
+    factories.scanner = [&] {
+        std::unique_lock<std::mutex> lock(mutex);
+        factory_entered = true;
+        condition.notify_one();
+        condition.wait(lock, [&] { return release_factory; });
+        return std::unique_ptr<IScanner>();
+    };
+    TaskRuntime runtime(task_manager, 1, 2, std::move(factories));
+    runtime.start();
+    BackupRequest first;
+    first.source_path = "/source-1";
+    first.output_path = "/archive-1";
+    BackupRequest second = first;
+    second.source_path = "/source-2";
+    second.output_path = "/archive-2";
+    const auto first_submission = runtime.submit_backup(first);
+    ASSERT_TRUE(first_submission.accepted());
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(condition.wait_for(lock, std::chrono::seconds(1),
+            [&] { return factory_entered; }));
+    }
+    const auto second_submission = runtime.submit_backup(second);
+    ASSERT_TRUE(second_submission.accepted());
+    ASSERT_TRUE(runtime.cancel_task(second_submission.task_id));
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        release_factory = true;
+    }
+    condition.notify_one();
+
+    EXPECT_EQ(wait_for_terminal(task_manager, first_submission.task_id).status,
+              TaskStatus::FAILED);
     runtime.shutdown();
 }
 

@@ -64,6 +64,12 @@ TEST(TaskManager, CancelPendingTask) {
     EXPECT_EQ(task.status, TaskStatus::CANCELLED);
 }
 
+TEST(TaskManager, CancelMissingTaskFails) {
+    TaskManager mgr;
+
+    EXPECT_FALSE(mgr.cancel_task("missing"));
+}
+
 TEST(TaskManager, CancelledTaskCannotBeCompletedAsSuccess) {
     TaskManager mgr;
     BackupRequest req;
