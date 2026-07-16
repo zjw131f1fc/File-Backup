@@ -94,8 +94,8 @@ Result RestoreScheduler::run(const std::string& task_id, const RestoreRequest& r
         final_result.message = "restore completed with " +
             std::to_string(error_count) + " errors";
         final_result.error_count = error_count;
-        final_result.warning_count = warning_count;
     }
+    final_result.warning_count = warning_count;
 
     task_manager_.complete_task(task_id, final_result);
     return final_result;
