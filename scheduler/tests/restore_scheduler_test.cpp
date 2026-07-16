@@ -110,6 +110,31 @@ TEST(RestoreSchedulerContract, EntryFailureProducesPartialSuccess) {
     EXPECT_EQ(result.error_count, 1);
 }
 
+TEST(RestoreSchedulerContract, NextEntryFailureIsCounted) {
+    TaskManager task_mgr;
+    NiceMock<MockArchiveReader> mock_reader;
+    NiceMock<MockRestorer> mock_restorer;
+    Result validation;
+    validation.status = Status::SUCCESS;
+    EXPECT_CALL(mock_reader, validate()).WillOnce(Return(validation));
+    EXPECT_CALL(mock_reader, has_next_entry())
+        .WillOnce(Return(true)).WillOnce(Return(false));
+    Result failure;
+    failure.status = Status::FAILED;
+    failure.message = "truncated entry";
+    EXPECT_CALL(mock_reader, next_entry(_)).WillOnce(Return(failure));
+
+    RestoreRequest req;
+    req.archive_path = "/tmp/archive.dat";
+    req.target_path = "/tmp/restore";
+    const auto task_id = task_mgr.create_restore_task(req);
+
+    RestoreScheduler scheduler(task_mgr, mock_reader, mock_restorer);
+    const Result result = scheduler.run(task_id, req);
+    EXPECT_EQ(result.status, Status::PARTIAL_SUCCESS);
+    EXPECT_EQ(result.error_count, 1);
+}
+
 TEST(RestoreSchedulerContract, MetadataWarningIsPreserved) {
     TaskManager task_mgr;
     NiceMock<MockArchiveReader> mock_reader;

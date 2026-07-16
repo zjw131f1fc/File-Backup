@@ -1,5 +1,10 @@
 #include <gtest/gtest.h>
 #include "scheduler/task_runtime.h"
+#include "modules/archive_reader/archive_reader.h"
+#include "modules/archive_writer/archive_writer.h"
+#include "modules/filter/filter.h"
+#include "modules/restore/restore.h"
+#include "modules/scanner/scanner.h"
 #include "../../tests/helpers/temp_dir.h"
 #include <chrono>
 #include <filesystem>
@@ -31,6 +36,93 @@ TEST(TaskRuntime, RejectsInvalidConfiguration) {
     TaskManager task_manager;
     EXPECT_THROW(TaskRuntime(task_manager, 0, 1), std::invalid_argument);
     EXPECT_THROW(TaskRuntime(task_manager, 1, 0), std::invalid_argument);
+}
+
+TEST(TaskRuntime, RepeatedStartAndShutdownAreSafe) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 2);
+
+    runtime.start();
+    runtime.start();
+    runtime.shutdown();
+    runtime.start();
+    runtime.shutdown();
+}
+
+TEST(TaskRuntime, ShutdownCancelsQueuedTasks) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 2);
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+    const auto submission = runtime.submit_backup(request);
+
+    ASSERT_TRUE(submission.accepted());
+    runtime.shutdown();
+
+    EXPECT_EQ(task_manager.get_task(submission.task_id).status,
+              TaskStatus::CANCELLED);
+}
+
+TEST(TaskRuntime, CompletesBackupWhenFactoryReturnsNull) {
+    TaskManager task_manager;
+    TaskRuntimeFactories factories;
+    factories.scanner = [] { return std::unique_ptr<IScanner>(); };
+    TaskRuntime runtime(task_manager, 1, 2, std::move(factories));
+    runtime.start();
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+
+    const auto submission = runtime.submit_backup(request);
+    ASSERT_TRUE(submission.accepted());
+    const auto task = wait_for_terminal(task_manager, submission.task_id);
+
+    EXPECT_EQ(task.status, TaskStatus::FAILED);
+    EXPECT_NE(task.result.message.find("create backup task modules"), std::string::npos);
+    runtime.shutdown();
+}
+
+TEST(TaskRuntime, CompletesRestoreWhenFactoryReturnsNull) {
+    TaskManager task_manager;
+    TaskRuntimeFactories factories;
+    factories.archive_reader = [](const std::string&) {
+        return std::unique_ptr<IArchiveReader>();
+    };
+    TaskRuntime runtime(task_manager, 1, 2, std::move(factories));
+    runtime.start();
+    RestoreRequest request;
+    request.archive_path = "/archive";
+    request.target_path = "/target";
+
+    const auto submission = runtime.submit_restore(request);
+    ASSERT_TRUE(submission.accepted());
+    const auto task = wait_for_terminal(task_manager, submission.task_id);
+
+    EXPECT_EQ(task.status, TaskStatus::FAILED);
+    EXPECT_NE(task.result.message.find("create restore task modules"), std::string::npos);
+    runtime.shutdown();
+}
+
+TEST(TaskRuntime, ConvertsFactoryExceptionToTaskFailure) {
+    TaskManager task_manager;
+    TaskRuntimeFactories factories;
+    factories.scanner = []() -> std::unique_ptr<IScanner> {
+        throw std::runtime_error("factory failed");
+    };
+    TaskRuntime runtime(task_manager, 1, 2, std::move(factories));
+    runtime.start();
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+
+    const auto submission = runtime.submit_backup(request);
+    ASSERT_TRUE(submission.accepted());
+    const auto task = wait_for_terminal(task_manager, submission.task_id);
+
+    EXPECT_EQ(task.status, TaskStatus::FAILED);
+    EXPECT_NE(task.result.message.find("factory failed"), std::string::npos);
+    runtime.shutdown();
 }
 
 TEST(TaskRuntime, SubmitsBackupAndRunsInBackground) {

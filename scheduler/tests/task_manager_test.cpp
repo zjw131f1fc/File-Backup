@@ -48,6 +48,12 @@ TEST(TaskManager, StartPendingTask) {
     EXPECT_FALSE(mgr.start_task(id));
 }
 
+TEST(TaskManager, StartMissingTaskFails) {
+    TaskManager mgr;
+
+    EXPECT_FALSE(mgr.start_task("missing"));
+}
+
 TEST(TaskManager, CancelPendingTask) {
     TaskManager mgr;
     BackupRequest req;
