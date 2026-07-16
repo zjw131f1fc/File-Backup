@@ -27,11 +27,13 @@ TaskRuntime::Impl::Impl(TaskManager& manager,
         });
 }
 
+// Runtime 销毁时先走统一关闭流程，再解除 TaskManager 对本对象的回调引用。
 TaskRuntime::Impl::~Impl() {
     shutdown();
     task_manager.set_observer({});
 }
 
+// 创建固定数量的 worker；worker 创建后会阻塞等待队列条件变量。
 void TaskRuntime::Impl::start() {
     std::lock_guard<std::mutex> lock(mutex);
     if (started || stopping) {

@@ -5,6 +5,7 @@ namespace backup {
 
 namespace {
 
+// 归档名称只能是文件名，不能借此把输出路径逃逸到其他目录。
 bool valid_archive_name(const std::string& name) {
     if (name.empty()) return true;
     const std::filesystem::path path(name);
@@ -12,6 +13,7 @@ bool valid_archive_name(const std::string& name) {
         name != "." && name != "..";
 }
 
+// 构造提交失败结果；失败不会创建 TaskManager 任务，因此 task_id 为空。
 TaskSubmission failed_submission(const std::string& code, const std::string& message) {
     TaskSubmission submission;
     submission.error_code = code;
@@ -27,10 +29,12 @@ TaskSubmission TaskRuntime::Impl::submit_backup(const BackupRequest& request) {
     return submit(Job{TaskKind::BACKUP, "", request, {}});
 }
 
+// 还原请求不需要输出文件名分配，直接进入通用提交流程。
 TaskSubmission TaskRuntime::Impl::submit_restore(const RestoreRequest& request) {
     return submit(Job{TaskKind::RESTORE, "", {}, request});
 }
 
+// 在 Runtime 锁内完成容量检查、任务登记、元数据登记和入队，保证这些步骤不可交错。
 TaskSubmission TaskRuntime::Impl::submit(Job job) {
     std::lock_guard<std::mutex> lock(mutex);
     if (stopping) {
@@ -86,6 +90,7 @@ TaskSubmission TaskRuntime::Impl::submit(Job job) {
     return submission;
 }
 
+// 为备份选择最终输出路径：显式名称必须不存在，省略名称时自动寻找可用文件名。
 bool TaskRuntime::Impl::prepare_backup_output(BackupRequest& request,
                                               TaskSubmission& failure) {
     if (request.output_directory.empty()) return true;

@@ -30,6 +30,7 @@ Result BackupScheduler::run(const std::string& task_id, const BackupRequest& req
     return final_result;
 }
 
+// 统一构造阶段性进度，避免 run() 重复填写 Progress 字段。
 void BackupScheduler::update_progress(const std::string& task_id,
                                       const std::string& stage,
                                       const std::string& current_path) {
@@ -39,6 +40,7 @@ void BackupScheduler::update_progress(const std::string& task_id,
     task_manager_.update_progress(task_id, progress);
 }
 
+// 让 Scanner 负责遍历源目录；回调同时把实时进度交给 TaskManager，并检查取消。
 Result BackupScheduler::scan_source(const std::string& task_id,
                                     const BackupRequest& request) {
     // 扫描器内部负责“扫描 -> 筛选 -> 写入归档”。回调返回 false 表示取消。
@@ -55,6 +57,7 @@ Result BackupScheduler::scan_source(const std::string& task_id,
     );
 }
 
+// 扫描成功才允许 commit；扫描失败或提交失败都必须 abort，避免留下不完整归档。
 Result BackupScheduler::finish_archive(const std::string& task_id,
                                         const BackupRequest& request,
                                         const Result& scan_result) {

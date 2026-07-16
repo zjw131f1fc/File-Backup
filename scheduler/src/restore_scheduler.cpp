@@ -32,6 +32,7 @@ Result RestoreScheduler::run(const std::string& task_id, const RestoreRequest& r
     return final_result;
 }
 
+// 统一创建并发布还原阶段进度。
 void RestoreScheduler::update_progress(const std::string& task_id,
                                        const std::string& stage,
                                        const std::string& current_path) {
@@ -41,6 +42,7 @@ void RestoreScheduler::update_progress(const std::string& task_id,
     task_manager_.update_progress(task_id, progress);
 }
 
+// Reader 已由 Runtime 创建，这里只执行归档格式校验并包装错误消息。
 Result RestoreScheduler::validate_archive() {
     const Result validation_result = reader_->validate();
     if (validation_result.ok()) {
@@ -53,6 +55,7 @@ Result RestoreScheduler::validate_archive() {
     return result;
 }
 
+// 按流式方式逐条处理归档，不会预先把所有条目或文件内容加载到内存。
 RestoreScheduler::RestoreSummary RestoreScheduler::restore_entries(
     const std::string& task_id,
     const RestoreRequest& request) {
@@ -67,6 +70,7 @@ RestoreScheduler::RestoreSummary RestoreScheduler::restore_entries(
     return summary;
 }
 
+// 处理当前条目：读取信息、更新进度、恢复内容，最后恢复元数据。
 void RestoreScheduler::restore_one_entry(const std::string& task_id,
                                          const RestoreRequest& request,
                                          RestoreSummary& summary) {
@@ -101,6 +105,7 @@ void RestoreScheduler::restore_one_entry(const std::string& task_id,
     }
 }
 
+// 只根据计数器生成最终结果，不执行任何 I/O。
 Result RestoreScheduler::make_final_result(const RestoreSummary& summary) const {
     Result result;
     if (summary.cancelled) {
@@ -122,6 +127,7 @@ Result RestoreScheduler::make_final_result(const RestoreSummary& summary) const 
     return result;
 }
 
+// 取消由 TaskManager 发起，Scheduler 只负责读取这个状态。
 bool RestoreScheduler::is_cancelled(const std::string& task_id) const {
     return task_manager_.get_task(task_id).status == TaskStatus::CANCELLED;
 }

@@ -10,6 +10,7 @@
 
 namespace backup {
 
+// 给未显式注入的工厂补上真实子模块实现；测试可以只替换需要模拟的工厂。
 void TaskRuntime::Impl::configure_default_factories() {
     if (!factories.scanner) factories.scanner = [] { return create_scanner(); };
     if (!factories.filter) factories.filter = [](const FilterRules& rules) {
@@ -30,6 +31,7 @@ void TaskRuntime::Impl::configure_default_factories() {
 
 namespace {
 
+// 统一生成“子模块创建失败”的任务结果。
 Result module_creation_failure(const std::string& type) {
     Result failure;
     failure.status = Status::FAILED;
@@ -40,6 +42,7 @@ Result module_creation_failure(const std::string& type) {
 }  // namespace
 
 // worker 主循环：取出队列任务，创建子模块并交给对应执行器。
+// 没有任务时 condition.wait() 会阻塞，不会忙等消耗 CPU。
 void TaskRuntime::Impl::worker_loop() {
     while (true) {
         Job job;

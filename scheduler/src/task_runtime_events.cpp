@@ -6,6 +6,7 @@
 
 namespace backup {
 
+// 生成 API/SSE 使用的 UTC 时间戳。
 std::string task_runtime_timestamp_now() {
     const auto now = std::chrono::system_clock::now();
     const auto time = std::chrono::system_clock::to_time_t(now);
@@ -18,6 +19,7 @@ std::string task_runtime_timestamp_now() {
 
 namespace {
 
+// 判断任务是否已经进入不可再执行的终态。
 bool is_terminal_status(TaskStatus status) {
     return status == TaskStatus::SUCCESS ||
         status == TaskStatus::PARTIAL_SUCCESS ||
@@ -28,6 +30,7 @@ bool is_terminal_status(TaskStatus status) {
 }  // namespace
 
 // 事件记录为 API 查询和 SSE 推送提供历史快照。
+// 调用方已经持有 Runtime 锁，因此这里使用带 locked 后缀的内部版本。
 void TaskRuntime::Impl::record_event_locked(const std::string& task_id,
                                              const Task& task,
                                              const std::string& change) {
@@ -42,6 +45,7 @@ void TaskRuntime::Impl::record_event_locked(const std::string& task_id,
     events[task_id].push_back(TaskEvent{next_event_id++, task_id, change, task});
 }
 
+// 供 TaskManager 观察者调用的线程安全包装，会先取得 Runtime 锁。
 void TaskRuntime::Impl::record_event(const std::string& task_id,
                                      const Task& task,
                                      const std::string& change) {
@@ -49,6 +53,7 @@ void TaskRuntime::Impl::record_event(const std::string& task_id,
     record_event_locked(task_id, task, change);
 }
 
+// 按提交顺序组合任务状态和 Runtime 元数据，供任务列表 API 使用。
 std::vector<TaskSnapshot> TaskRuntime::Impl::list_tasks() const {
     std::lock_guard<std::mutex> lock(mutex);
     std::vector<TaskSnapshot> result;
@@ -65,6 +70,7 @@ std::vector<TaskSnapshot> TaskRuntime::Impl::list_tasks() const {
     return result;
 }
 
+// 返回指定事件 ID 之后的新事件，避免前端重复接收历史事件。
 std::vector<TaskEvent> TaskRuntime::Impl::get_events(const std::string& task_id,
                                                      uint64_t after_id) const {
     std::lock_guard<std::mutex> lock(mutex);
