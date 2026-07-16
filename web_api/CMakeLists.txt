@@ -1,4 +1,5 @@
 add_library(backup_web_api
+    src/web_api_internal.cpp
     src/web_api.cpp
     src/web_api_server.cpp
 )
