@@ -162,6 +162,11 @@ TEST(WebApiServerContract, StreamsTaskEventsOverHttp) {
     ASSERT_TRUE(events) << "HTTP error: " << static_cast<int>(events.error());
     EXPECT_EQ(events->status, 200);
     EXPECT_NE(events->body.find("event: status"), std::string::npos);
+    httplib::Headers invalid_cursor{{"Last-Event-ID", "not-an-integer"}};
+    const auto events_with_invalid_cursor = events_client.Get(
+        "/api/tasks/" + task_id + "/events", invalid_cursor);
+    ASSERT_TRUE(events_with_invalid_cursor);
+    EXPECT_EQ(events_with_invalid_cursor->status, 200);
     server.stop();
 }
 
@@ -518,6 +523,8 @@ TEST(WebApiContract, RejectsInvalidFilterShapesAndRanges) {
     for (const auto& rules : {
         json{{"include_paths", "src"}},
         json{{"include_paths", {1}}},
+        json{{"include_uids", 1000}},
+        json{{"include_types", "REGULAR_FILE"}},
         json{{"include_uids", {"1000"}}},
         json{{"newer_than_sec", "yesterday"}},
         json{{"newer_than_sec", -1}},
@@ -580,6 +587,14 @@ TEST(WebApiContract, RejectsMissingBackupAndArchivePaths) {
             {"filter_rules", json::object()}
         }.dump());
     EXPECT_EQ(backup.status, 400);
+
+    const auto invalid_source = api.handle(
+        "POST", "/api/backup", json{
+            {"source_path", temp.path() + "/missing-source"},
+            {"output_path", temp.path() + "/archive.dat"},
+            {"filter_rules", json::object()}
+        }.dump());
+    EXPECT_EQ(invalid_source.status, 422);
 
     const auto restore = api.handle(
         "POST", "/api/restore", json{
@@ -673,5 +688,8 @@ TEST(WebApiServerContract, OptionsExposeCorsHeaders) {
     EXPECT_EQ(response->status, 204);
     EXPECT_EQ(response->get_header_value("Access-Control-Allow-Origin"), config.allowed_origin);
     EXPECT_EQ(response->get_header_value("Access-Control-Allow-Methods"), "GET, POST, OPTIONS");
+    const auto health = client.Get("/api/health");
+    ASSERT_TRUE(health);
+    EXPECT_EQ(health->get_header_value("Access-Control-Allow-Origin"), config.allowed_origin);
     server.stop();
 }
