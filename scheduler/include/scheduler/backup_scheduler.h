@@ -24,6 +24,14 @@ public:
     Result run(const std::string& task_id, const BackupRequest& request);
 
 private:
+    void update_progress(const std::string& task_id,
+                         const std::string& stage,
+                         const std::string& current_path);
+    Result scan_source(const std::string& task_id, const BackupRequest& request);
+    Result finish_archive(const std::string& task_id,
+                          const BackupRequest& request,
+                          const Result& scan_result);
+
     TaskManager& task_manager_;
     IScanner* scanner_;
     IFilter* filter_;

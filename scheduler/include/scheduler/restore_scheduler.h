@@ -22,6 +22,24 @@ public:
     Result run(const std::string& task_id, const RestoreRequest& request);
 
 private:
+    struct RestoreSummary {
+        int error_count = 0;
+        int warning_count = 0;
+        bool cancelled = false;
+    };
+
+    void update_progress(const std::string& task_id,
+                         const std::string& stage,
+                         const std::string& current_path = {});
+    Result validate_archive();
+    RestoreSummary restore_entries(const std::string& task_id,
+                                   const RestoreRequest& request);
+    void restore_one_entry(const std::string& task_id,
+                           const RestoreRequest& request,
+                           RestoreSummary& summary);
+    Result make_final_result(const RestoreSummary& summary) const;
+    bool is_cancelled(const std::string& task_id) const;
+
     TaskManager& task_manager_;
     IArchiveReader* reader_;
     IRestorer* restorer_;

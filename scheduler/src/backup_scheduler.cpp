@@ -18,77 +18,77 @@ BackupScheduler::BackupScheduler(
 {
 }
 
+// 备份主流程：更新阶段 -> 扫描写入 -> 提交归档 -> 记录最终结果。
 Result BackupScheduler::run(const std::string& task_id, const BackupRequest& request) {
-    // 更新状态为 RUNNING：正在创建筛选器
-    {
-        Progress p;
-        p.stage = "creating_filter";
-        p.current_path = request.source_path;
-        task_manager_.update_progress(task_id, p);
-    }
+    update_progress(task_id, "creating_filter", request.source_path);
+    update_progress(task_id, "creating_archive", request.output_path);
+    update_progress(task_id, "scanning", request.source_path);
 
-    // 更新进度：正在创建归档写入器
-    {
-        Progress p;
-        p.stage = "creating_archive";
-        p.current_path = request.output_path;
-        task_manager_.update_progress(task_id, p);
-    }
+    const Result scan_result = scan_source(task_id, request);
+    const Result final_result = finish_archive(task_id, request, scan_result);
+    task_manager_.complete_task(task_id, final_result);
+    return final_result;
+}
 
-    // 更新进度：正在扫描和写入
-    {
-        Progress p;
-        p.stage = "scanning";
-        p.current_path = request.source_path;
-        task_manager_.update_progress(task_id, p);
-    }
+void BackupScheduler::update_progress(const std::string& task_id,
+                                      const std::string& stage,
+                                      const std::string& current_path) {
+    Progress progress;
+    progress.stage = stage;
+    progress.current_path = current_path;
+    task_manager_.update_progress(task_id, progress);
+}
 
-    // 调用扫描器（内部：扫描 → 筛选 → 开源文件流 → 写入归档）
-    // 进度回调返回 true 继续，返回 false 取消
-    auto progress_cb = [this, &task_id](const Progress& p) -> bool {
-        task_manager_.update_progress(task_id, p);
-        // 检查任务是否被取消
-        Task task = task_manager_.get_task(task_id);
-        return task.status != TaskStatus::CANCELLED;
+Result BackupScheduler::scan_source(const std::string& task_id,
+                                    const BackupRequest& request) {
+    // 扫描器内部负责“扫描 -> 筛选 -> 写入归档”。回调返回 false 表示取消。
+    const auto progress_callback = [this, &task_id](const Progress& progress) {
+        task_manager_.update_progress(task_id, progress);
+        return task_manager_.get_task(task_id).status != TaskStatus::CANCELLED;
     };
 
-    Result scan_result = scanner_->scan_and_backup(
+    return scanner_->scan_and_backup(
         request.source_path,
         *filter_,
         *archive_writer_,
-        progress_cb
+        progress_callback
     );
+}
 
-    // 根据扫描结果决定提交或终止归档
-    Result final_result;
-    if (scan_result.ok()) {
-        Progress p = task_manager_.get_task(task_id).progress;
-        p.stage = "committing_archive";
-        p.current_path = request.output_path;
-        task_manager_.update_progress(task_id, p);
-        Result commit_result = archive_writer_->commit();
-        if (commit_result.ok()) {
-            final_result.status = Status::SUCCESS;
-            final_result.message = "backup completed successfully";
-        } else {
-            archive_writer_->abort();
-            final_result.status = Status::FAILED;
-            final_result.message = "archive commit failed: " + commit_result.message;
-            final_result.error_count = commit_result.error_count;
-        }
-    } else {
+Result BackupScheduler::finish_archive(const std::string& task_id,
+                                        const BackupRequest& request,
+                                        const Result& scan_result) {
+    if (!scan_result.ok()) {
         archive_writer_->abort();
         if (scan_result.status == Status::PARTIAL_SUCCESS) {
-            final_result.status = Status::FAILED;
-            final_result.message = "backup partially failed, archive aborted";
-            final_result.error_count = scan_result.error_count;
-        } else {
-            final_result = scan_result;
+            Result result;
+            result.status = Status::FAILED;
+            result.message = "backup partially failed, archive aborted";
+            result.error_count = scan_result.error_count;
+            return result;
         }
+        return scan_result;
     }
 
-    task_manager_.complete_task(task_id, final_result);
-    return final_result;
+    Progress progress = task_manager_.get_task(task_id).progress;
+    progress.stage = "committing_archive";
+    progress.current_path = request.output_path;
+    task_manager_.update_progress(task_id, progress);
+
+    const Result commit_result = archive_writer_->commit();
+    if (commit_result.ok()) {
+        Result result;
+        result.status = Status::SUCCESS;
+        result.message = "backup completed successfully";
+        return result;
+    }
+
+    archive_writer_->abort();
+    Result result;
+    result.status = Status::FAILED;
+    result.message = "archive commit failed: " + commit_result.message;
+    result.error_count = commit_result.error_count;
+    return result;
 }
 
 }  // namespace backup
