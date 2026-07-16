@@ -14,8 +14,7 @@ std::string TaskManager::generate_task_id() {
     return oss.str();
 }
 
-std::string TaskManager::create_backup_task(const BackupRequest& request) {
-    (void)request;
+std::string TaskManager::create_backup_task(const BackupRequest&) {
     std::lock_guard<std::mutex> lock(mutex_);
     Task task;
     task.task_id = generate_task_id();
@@ -25,8 +24,7 @@ std::string TaskManager::create_backup_task(const BackupRequest& request) {
     return task.task_id;
 }
 
-std::string TaskManager::create_restore_task(const RestoreRequest& request) {
-    (void)request;
+std::string TaskManager::create_restore_task(const RestoreRequest&) {
     std::lock_guard<std::mutex> lock(mutex_);
     Task task;
     task.task_id = generate_task_id();

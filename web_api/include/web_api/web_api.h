@@ -35,6 +35,9 @@ public:
     void mount(httplib::Server& server);
 
 private:
+    ApiResponse handle_task_submission(const std::string& path,
+                                       const std::string& body);
+
     TaskRuntime& runtime_;
     ApiConfig config_;
 };

@@ -45,6 +45,13 @@ std::string timestamp_now() {
     return output.str();
 }
 
+bool is_terminal_status(TaskStatus status) {
+    return status == TaskStatus::SUCCESS ||
+        status == TaskStatus::PARTIAL_SUCCESS ||
+        status == TaskStatus::FAILED ||
+        status == TaskStatus::CANCELLED;
+}
+
 }  // namespace
 
 struct TaskRuntime::Impl {
@@ -61,6 +68,7 @@ struct TaskRuntime::Impl {
     };
 
     struct Metadata {
+        // Runtime metadata is separate from TaskManager's mutable status.
         std::string type;
         std::string output_path;
         std::string source_path;
@@ -158,6 +166,8 @@ struct TaskRuntime::Impl {
     }
 
     TaskSubmission submit(Job job) {
+        // Keep the full request in the queue; TaskManager only tracks status
+        // and progress so it remains independent from worker execution.
         std::lock_guard<std::mutex> lock(mutex);
         if (stopping) {
             return failed_submission("RUNTIME_STOPPED", "task runtime is shutting down");
@@ -297,10 +307,7 @@ struct TaskRuntime::Impl {
         if (task.status == TaskStatus::RUNNING && metadata_it->second.started_at.empty()) {
             metadata_it->second.started_at = timestamp_now();
         }
-        if (task.status == TaskStatus::SUCCESS ||
-            task.status == TaskStatus::PARTIAL_SUCCESS ||
-            task.status == TaskStatus::FAILED ||
-            task.status == TaskStatus::CANCELLED) {
+        if (is_terminal_status(task.status)) {
             if (metadata_it->second.finished_at.empty()) {
                 metadata_it->second.finished_at = timestamp_now();
             }

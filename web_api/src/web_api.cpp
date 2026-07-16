@@ -294,6 +294,13 @@ std::string task_status_name(TaskStatus status) {
     return "FAILED";
 }
 
+bool is_terminal_status(TaskStatus status) {
+    return status == TaskStatus::SUCCESS ||
+        status == TaskStatus::PARTIAL_SUCCESS ||
+        status == TaskStatus::FAILED ||
+        status == TaskStatus::CANCELLED;
+}
+
 json task_json(const Task& task) {
     json result = nullptr;
     if (task.status != TaskStatus::PENDING && task.status != TaskStatus::RUNNING) {
@@ -568,6 +575,11 @@ ApiResponse WebApi::handle(const std::string& method,
         return error_response(404, "NOT_FOUND", "API endpoint not found");
     }
 
+    return handle_task_submission(path, body);
+}
+
+ApiResponse WebApi::handle_task_submission(const std::string& path,
+                                           const std::string& body) {
     json request;
     try {
         request = json::parse(body);
@@ -684,11 +696,8 @@ void WebApi::mount(httplib::Server& server) {
                         after_id = event.id;
                     }
                     const auto task = runtime_.get_task(task_id);
-                    const bool terminal = task.status == TaskStatus::SUCCESS ||
-                        task.status == TaskStatus::PARTIAL_SUCCESS ||
-                        task.status == TaskStatus::FAILED ||
-                        task.status == TaskStatus::CANCELLED;
-                    if (terminal && runtime_.get_events(task_id, after_id).empty()) {
+                    if (is_terminal_status(task.status) &&
+                        runtime_.get_events(task_id, after_id).empty()) {
                         sink.done();
                         return true;
                     }

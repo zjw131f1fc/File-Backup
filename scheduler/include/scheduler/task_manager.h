@@ -15,10 +15,10 @@ class TaskManager {
 public:
     using TaskObserver = std::function<void(const std::string&, const Task&, const std::string&)>;
 
-    // 创建备份任务，返回 task_id
+    // 只登记任务状态。请求正文由 TaskRuntime::Job 持有并交给 worker 执行。
     std::string create_backup_task(const BackupRequest& request);
 
-    // 创建还原任务，返回 task_id
+    // 只登记任务状态。请求正文由 TaskRuntime::Job 持有并交给 worker 执行。
     std::string create_restore_task(const RestoreRequest& request);
 
     // 获取任务信息
