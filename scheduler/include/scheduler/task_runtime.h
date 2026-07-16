@@ -6,11 +6,26 @@
 #include "scheduler/task.h"
 #include "scheduler/task_manager.h"
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace backup {
+
+class IScanner;
+class IFilter;
+class IArchiveWriter;
+class IArchiveReader;
+class IRestorer;
+
+struct TaskRuntimeFactories {
+    std::function<std::unique_ptr<IScanner>()> scanner;
+    std::function<std::unique_ptr<IFilter>(const FilterRules&)> filter;
+    std::function<std::unique_ptr<IArchiveWriter>(const std::string&)> archive_writer;
+    std::function<std::unique_ptr<IArchiveReader>(const std::string&)> archive_reader;
+    std::function<std::unique_ptr<IRestorer>()> restorer;
+};
 
 struct TaskSubmission {
     std::string task_id;
@@ -39,7 +54,8 @@ class TaskRuntime {
 public:
     TaskRuntime(TaskManager& task_manager,
                 std::size_t worker_count = 2,
-                std::size_t max_queued_tasks = 32);
+                std::size_t max_queued_tasks = 32,
+                TaskRuntimeFactories factories = {});
     ~TaskRuntime();
 
     TaskRuntime(const TaskRuntime&) = delete;

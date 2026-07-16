@@ -60,16 +60,35 @@ struct TaskRuntime::Impl {
         std::string finished_at;
     };
 
-    Impl(TaskManager& manager, std::size_t workers, std::size_t max_queue)
+    Impl(TaskManager& manager,
+         std::size_t workers,
+         std::size_t max_queue,
+         TaskRuntimeFactories task_factories)
         : task_manager(manager)
         , worker_count_value(workers)
-        , max_queued_tasks(max_queue) {
+        , max_queued_tasks(max_queue)
+        , factories(std::move(task_factories)) {
         if (worker_count_value == 0) {
             throw std::invalid_argument("worker_count must be greater than zero");
         }
         if (max_queued_tasks == 0) {
             throw std::invalid_argument("max_queued_tasks must be greater than zero");
         }
+        if (!factories.scanner) factories.scanner = [] { return create_scanner(); };
+        if (!factories.filter) factories.filter = [](const FilterRules& rules) {
+            return create_filter(rules);
+        };
+        if (!factories.archive_writer) {
+            factories.archive_writer = [](const std::string& path) {
+                return create_archive(path);
+            };
+        }
+        if (!factories.archive_reader) {
+            factories.archive_reader = [](const std::string& path) {
+                return open_archive(path);
+            };
+        }
+        if (!factories.restorer) factories.restorer = [] { return create_restorer(); };
         task_manager.set_observer(
             [this](const std::string& task_id, const Task& task, const std::string& change) {
                 record_event(task_id, task, change);
@@ -246,9 +265,9 @@ struct TaskRuntime::Impl {
 
             try {
                 if (job.kind == TaskKind::BACKUP) {
-                    auto scanner = create_scanner();
-                    auto filter = create_filter(job.backup_request.filter_rules);
-                    auto writer = create_archive(job.backup_request.output_path);
+                    auto scanner = factories.scanner();
+                    auto filter = factories.filter(job.backup_request.filter_rules);
+                    auto writer = factories.archive_writer(job.backup_request.output_path);
                     if (!scanner || !filter || !writer) {
                         Result failure;
                         failure.status = Status::FAILED;
@@ -259,8 +278,8 @@ struct TaskRuntime::Impl {
                     BackupScheduler scheduler(task_manager, *scanner, *filter, *writer);
                     scheduler.run(job.task_id, job.backup_request);
                 } else {
-                    auto reader = open_archive(job.restore_request.archive_path);
-                    auto restorer = create_restorer();
+                    auto reader = factories.archive_reader(job.restore_request.archive_path);
+                    auto restorer = factories.restorer();
                     if (!reader || !restorer) {
                         Result failure;
                         failure.status = Status::FAILED;
@@ -288,6 +307,7 @@ struct TaskRuntime::Impl {
     TaskManager& task_manager;
     const std::size_t worker_count_value;
     const std::size_t max_queued_tasks;
+    TaskRuntimeFactories factories;
     mutable std::mutex mutex;
     std::condition_variable condition;
     std::deque<Job> queue;
@@ -302,8 +322,10 @@ struct TaskRuntime::Impl {
 
 TaskRuntime::TaskRuntime(TaskManager& task_manager,
                          std::size_t worker_count,
-                         std::size_t max_queued_tasks)
-    : impl_(std::make_unique<Impl>(task_manager, worker_count, max_queued_tasks)) {}
+                         std::size_t max_queued_tasks,
+                         TaskRuntimeFactories factories)
+    : impl_(std::make_unique<Impl>(task_manager, worker_count, max_queued_tasks,
+                                   std::move(factories))) {}
 
 TaskRuntime::~TaskRuntime() = default;
 
