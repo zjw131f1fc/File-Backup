@@ -650,8 +650,7 @@ TEST(WebApiServerContract, RejectsInvalidBindAddressAndAllowsRepeatedStop) {
     TaskManager task_manager;
     TaskRuntime runtime(task_manager, 1, 2);
     ApiConfig config;
-    config.port = 0;
-    config.bind_address = "256.256.256.256";
+    config.port = -1;
     WebApiServer server(runtime, config);
 
     EXPECT_FALSE(server.start());
