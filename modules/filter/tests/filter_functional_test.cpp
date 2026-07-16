@@ -546,12 +546,16 @@ TEST(FilterFunctional, MultiplePathExcludePatterns) {
     rules.exclude_paths = {"build/", ".git/", "node_modules/", "__pycache__/", "venv/"};
     auto filter = create_filter(rules);
 
-    EXPECT_FALSE(filter->should_include(EntryInfo{"build/a.o"}));
-    EXPECT_FALSE(filter->should_include(EntryInfo{".git/config"}));
-    EXPECT_FALSE(filter->should_include(EntryInfo{"node_modules/pkg/index.js"}));
-    EXPECT_FALSE(filter->should_include(EntryInfo{"__pycache__/main.pyc"}));
-    EXPECT_FALSE(filter->should_include(EntryInfo{"venv/bin/python"}));
-    EXPECT_TRUE(filter->should_include(EntryInfo{"src/main.cpp"}));
+    auto check = [&](const std::string& p, bool expected) {
+        EntryInfo e; e.path = p;
+        EXPECT_EQ(filter->should_include(e), expected);
+    };
+    check("build/a.o", false);
+    check(".git/config", false);
+    check("node_modules/pkg/index.js", false);
+    check("__pycache__/main.pyc", false);
+    check("venv/bin/python", false);
+    check("src/main.cpp", true);
 }
 
 // ===== 14. 多个 UID 包含 =====

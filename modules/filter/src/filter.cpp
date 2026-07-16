@@ -34,12 +34,31 @@ bool glob_match(const std::string& pattern, const std::string& str) {
     return glob_match(pattern.c_str(), str.c_str());
 }
 
-// 判断 path 是否以 prefix 开头（目录前缀匹配）
-bool path_starts_with(const std::string& path, const std::string& prefix) {
-    if (path.size() < prefix.size()) return false;
-    if (path.compare(0, prefix.size(), prefix) != 0) return false;
-    if (path.size() == prefix.size()) return true;
-    if (prefix.back() == '/' || path[prefix.size()] == '/') return true;
+// 检查模式是否包含 glob 通配符
+bool is_glob_pattern(const std::string& pattern) {
+    return pattern.find('*') != std::string::npos ||
+           pattern.find('?') != std::string::npos;
+}
+
+// 路径匹配规则：
+// - 以 / 结尾 → 目录前缀匹配（匹配该目录下所有内容）
+// - 含 * 或 ? → glob 模式匹配
+// - 其他 → 精确前缀匹配
+bool path_matches(const std::string& path, const std::string& pattern) {
+    if (!pattern.empty() && pattern.back() == '/') {
+        // 目录前缀匹配：pattern 以 / 结尾，匹配该目录下所有内容
+        if (path.size() < pattern.size()) return false;
+        if (path.compare(0, pattern.size(), pattern) != 0) return false;
+        return true;  // pattern 末尾 / 已匹配目录分隔符
+    }
+    if (is_glob_pattern(pattern)) {
+        return glob_match(pattern, path);
+    }
+    // 普通前缀匹配
+    if (path.size() < pattern.size()) return false;
+    if (path.compare(0, pattern.size(), pattern) != 0) return false;
+    if (path.size() == pattern.size()) return true;
+    if (path[pattern.size()] == '/') return true;
     return false;
 }
 
@@ -59,7 +78,7 @@ public:
     bool should_include(const EntryInfo& entry) override {
         // 1. 路径排除（最高优先级）
         for (const auto& pattern : rules_.exclude_paths) {
-            if (path_starts_with(entry.path, pattern)) {
+            if (path_matches(entry.path, pattern)) {
                 return false;
             }
         }
@@ -68,7 +87,7 @@ public:
         if (!rules_.include_paths.empty()) {
             bool matched = false;
             for (const auto& pattern : rules_.include_paths) {
-                if (path_starts_with(entry.path, pattern)) {
+                if (path_matches(entry.path, pattern)) {
                     matched = true;
                     break;
                 }
