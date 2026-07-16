@@ -17,6 +17,7 @@ public:
         path_ = base / (prefix + std::to_string(::getpid()) + "_" +
                         std::to_string(rand_counter_++));
         std::filesystem::create_directories(path_);
+        path_str_ = path_.string();
     }
 
     ~TempDir() {

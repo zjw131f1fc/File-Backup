@@ -38,6 +38,16 @@ TEST(TaskManager, GetNonExistentTask) {
     EXPECT_NE(task.result.message.find("task not found"), std::string::npos);
 }
 
+TEST(TaskManager, StartPendingTask) {
+    TaskManager mgr;
+    BackupRequest req;
+    const std::string id = mgr.create_backup_task(req);
+
+    EXPECT_TRUE(mgr.start_task(id));
+    EXPECT_EQ(mgr.get_task(id).status, TaskStatus::RUNNING);
+    EXPECT_FALSE(mgr.start_task(id));
+}
+
 TEST(TaskManager, CancelPendingTask) {
     TaskManager mgr;
     BackupRequest req;
@@ -46,6 +56,22 @@ TEST(TaskManager, CancelPendingTask) {
 
     Task task = mgr.get_task(id);
     EXPECT_EQ(task.status, TaskStatus::CANCELLED);
+}
+
+TEST(TaskManager, CancelledTaskCannotBeCompletedAsSuccess) {
+    TaskManager mgr;
+    BackupRequest req;
+    const std::string id = mgr.create_backup_task(req);
+    ASSERT_TRUE(mgr.cancel_task(id));
+
+    Result success;
+    success.status = Status::SUCCESS;
+    success.message = "late success";
+    mgr.complete_task(id, success);
+
+    const Task task = mgr.get_task(id);
+    EXPECT_EQ(task.status, TaskStatus::CANCELLED);
+    EXPECT_EQ(task.result.status, Status::CANCELLED);
 }
 
 TEST(TaskManager, CancelCompletedTaskFails) {

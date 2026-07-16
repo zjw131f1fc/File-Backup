@@ -4,6 +4,7 @@
 #include "scheduler/restore_scheduler.h"
 #include "scheduler/task_manager.h"
 #include "../../tests/mocks/mock_modules.h"
+#include "../../tests/helpers/temp_dir.h"
 
 using namespace backup;
 using namespace backup::testing;
@@ -17,6 +18,7 @@ using ::testing::InSequence;
 TEST(BackupSchedulerContract, FailCallsAbort) {
     TaskManager task_mgr;
     StrictMock<MockScanner> mock_scanner;
+    NiceMock<MockFilter> mock_filter;
     StrictMock<MockArchiveWriter> mock_writer;
 
     // Scanner 返回 FAILED
@@ -34,7 +36,7 @@ TEST(BackupSchedulerContract, FailCallsAbort) {
 
     // commit 不应被调用（StrictMock 会报错如果被调）
 
-    BackupScheduler scheduler(task_mgr, &mock_scanner);
+    BackupScheduler scheduler(task_mgr, mock_scanner, mock_filter, mock_writer);
     BackupRequest req;
     req.source_path = "/tmp/src";
     req.output_path = "/tmp/archive.dat";
@@ -52,6 +54,7 @@ TEST(BackupSchedulerContract, FailCallsAbort) {
 TEST(BackupSchedulerContract, SuccessCallsCommit) {
     TaskManager task_mgr;
     NiceMock<MockScanner> mock_scanner;
+    NiceMock<MockFilter> mock_filter;
     NiceMock<MockArchiveWriter> mock_writer;
 
     Result success_result;
@@ -67,7 +70,7 @@ TEST(BackupSchedulerContract, SuccessCallsCommit) {
     // abort 不应被调用
     EXPECT_CALL(mock_writer, abort()).Times(0);
 
-    BackupScheduler scheduler(task_mgr, &mock_scanner);
+    BackupScheduler scheduler(task_mgr, mock_scanner, mock_filter, mock_writer);
     BackupRequest req;
     req.source_path = "/tmp/src";
     req.output_path = "/tmp/archive.dat";
@@ -84,6 +87,7 @@ TEST(BackupSchedulerContract, SuccessCallsCommit) {
 TEST(BackupSchedulerContract, CancelStopsScan) {
     TaskManager task_mgr;
     NiceMock<MockScanner> mock_scanner;
+    NiceMock<MockFilter> mock_filter;
     NiceMock<MockArchiveWriter> mock_writer;
 
     // Scanner 收到取消信号（进度回调返回 false）后返回 CANCELLED
@@ -95,7 +99,7 @@ TEST(BackupSchedulerContract, CancelStopsScan) {
     EXPECT_CALL(mock_writer, abort())
         .WillOnce(Return(Result{}));
 
-    BackupScheduler scheduler(task_mgr, &mock_scanner);
+    BackupScheduler scheduler(task_mgr, mock_scanner, mock_filter, mock_writer);
     BackupRequest req;
     req.source_path = "/tmp/src";
     req.output_path = "/tmp/archive.dat";
@@ -109,4 +113,26 @@ TEST(BackupSchedulerContract, CancelStopsScan) {
 
     Task task = task_mgr.get_task(task_id);
     EXPECT_EQ(task.status, TaskStatus::CANCELLED);
+}
+
+TEST(BackupSchedulerStubIntegration, DefaultStubsCreateArchive) {
+    TempDir tmp;
+    const auto source_path = tmp.create_dir("source");
+    const auto archive_path = tmp.path() + "/archive.dat";
+
+    TaskManager task_mgr;
+    BackupRequest req;
+    req.source_path = source_path;
+    req.output_path = archive_path;
+    auto scanner = create_scanner();
+    auto filter = create_filter(req.filter_rules);
+    auto writer = create_archive(archive_path);
+    BackupScheduler scheduler(task_mgr, *scanner, *filter, *writer);
+
+    const auto task_id = task_mgr.create_backup_task(req);
+    Result result = scheduler.run(task_id, req);
+
+    EXPECT_EQ(result.status, Status::SUCCESS);
+    EXPECT_TRUE(std::filesystem::exists(archive_path));
+    EXPECT_EQ(task_mgr.get_task(task_id).status, TaskStatus::SUCCESS);
 }

@@ -7,16 +7,15 @@ namespace backup {
 
 BackupScheduler::BackupScheduler(
     TaskManager& task_manager,
-    IScanner* scanner
+    IScanner& scanner,
+    IFilter& filter,
+    IArchiveWriter& archive_writer
 )
     : task_manager_(task_manager)
+    , scanner_(&scanner)
+    , filter_(&filter)
+    , archive_writer_(&archive_writer)
 {
-    if (!scanner) {
-        default_scanner_ = create_scanner();
-        scanner_ = default_scanner_.get();
-    } else {
-        scanner_ = scanner;
-    }
 }
 
 Result BackupScheduler::run(const std::string& task_id, const BackupRequest& request) {
@@ -28,26 +27,12 @@ Result BackupScheduler::run(const std::string& task_id, const BackupRequest& req
         task_manager_.update_progress(task_id, p);
     }
 
-    // 创建筛选器（FilterRules 烘焙进实例）
-    auto filter = create_filter(request.filter_rules);
-
     // 更新进度：正在创建归档写入器
     {
         Progress p;
         p.stage = "creating_archive";
         p.current_path = request.output_path;
         task_manager_.update_progress(task_id, p);
-    }
-
-    // 创建归档写入器
-    auto writer = create_archive(request.output_path);
-
-    if (!writer) {
-        Result r;
-        r.status = Status::FAILED;
-        r.message = "failed to create archive writer";
-        task_manager_.complete_task(task_id, r);
-        return r;
     }
 
     // 更新进度：正在扫描和写入
@@ -69,8 +54,8 @@ Result BackupScheduler::run(const std::string& task_id, const BackupRequest& req
 
     Result scan_result = scanner_->scan_and_backup(
         request.source_path,
-        *filter,
-        *writer,
+        *filter_,
+        *archive_writer_,
         progress_cb
     );
 
@@ -80,18 +65,18 @@ Result BackupScheduler::run(const std::string& task_id, const BackupRequest& req
         Progress p;
         p.stage = "committing_archive";
         task_manager_.update_progress(task_id, p);
-        Result commit_result = writer->commit();
+        Result commit_result = archive_writer_->commit();
         if (commit_result.ok()) {
             final_result.status = Status::SUCCESS;
             final_result.message = "backup completed successfully";
         } else {
-            writer->abort();
+            archive_writer_->abort();
             final_result.status = Status::FAILED;
             final_result.message = "archive commit failed: " + commit_result.message;
             final_result.error_count = commit_result.error_count;
         }
     } else {
-        writer->abort();
+        archive_writer_->abort();
         if (scan_result.status == Status::PARTIAL_SUCCESS) {
             final_result.status = Status::FAILED;
             final_result.message = "backup partially failed, archive aborted";

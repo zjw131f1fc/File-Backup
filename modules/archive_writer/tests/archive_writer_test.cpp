@@ -19,6 +19,7 @@ TEST(ArchiveWriterContract, CommitCreatesValidArchive) {
 
     Result r = writer->commit();
     EXPECT_EQ(r.status, Status::SUCCESS);
+    EXPECT_TRUE(std::filesystem::exists(tmp.path() + "/archive.dat"));
 
     // 归档文件应存在且可读
     auto reader = open_archive(tmp.path() + "/archive.dat");

@@ -2,7 +2,9 @@
 #include <gmock/gmock.h>
 #include "scheduler/restore_scheduler.h"
 #include "scheduler/task_manager.h"
+#include "modules/archive_writer/archive_writer.h"
 #include "../../tests/mocks/mock_modules.h"
+#include "../../tests/helpers/temp_dir.h"
 
 using namespace backup;
 using namespace backup::testing;
@@ -17,7 +19,13 @@ TEST(RestoreSchedulerContract, CancelStopsLoop) {
     NiceMock<MockArchiveReader> mock_reader;
     NiceMock<MockRestorer> mock_restorer;
 
-    // 第一个条目正常，第二个条目前检查到取消
+    RestoreRequest req;
+    req.archive_path = "/tmp/archive.dat";
+    req.target_path = "/tmp/restore";
+
+    std::string task_id = task_mgr.create_restore_task(req);
+
+    // 第一个条目正常，处理完成后在第二个条目前取消
     {
         InSequence seq;
         EXPECT_CALL(mock_reader, validate())
@@ -25,26 +33,49 @@ TEST(RestoreSchedulerContract, CancelStopsLoop) {
         EXPECT_CALL(mock_reader, has_next_entry())
             .WillOnce(Return(true));    // 第一个条目存在
         EXPECT_CALL(mock_reader, next_entry(_))
-            .WillOnce(Return(Result{Status::SUCCESS, ""}));
+            .WillOnce(::testing::Invoke([&task_mgr, &task_id](EntryInfo& entry) {
+                entry.path = "file.txt";
+                task_mgr.cancel_task(task_id);
+                return Result{Status::SUCCESS, ""};
+            }));
         EXPECT_CALL(mock_restorer, restore_entry(_, _, _, _))
             .WillOnce(Return(Result{Status::SUCCESS, ""}));
         EXPECT_CALL(mock_restorer, restore_metadata(_, _))
             .WillOnce(Return(Result{Status::SUCCESS, ""}));
+        EXPECT_CALL(mock_reader, has_next_entry())
+            .WillOnce(Return(true));    // 第二个条目前仍有条目
         // 取消后不再调用
     }
 
-    RestoreScheduler scheduler(task_mgr, &mock_reader, &mock_restorer);
-    RestoreRequest req;
-    req.archive_path = "/tmp/archive.dat";
-    req.target_path = "/tmp/restore";
-
-    std::string task_id = task_mgr.create_restore_task(req);
-    // 在执行前取消
-    task_mgr.cancel_task(task_id);
-
+    RestoreScheduler scheduler(task_mgr, mock_reader, mock_restorer);
     Result r = scheduler.run(task_id, req);
     EXPECT_EQ(r.status, Status::CANCELLED);
 
     Task task = task_mgr.get_task(task_id);
     EXPECT_EQ(task.status, TaskStatus::CANCELLED);
+}
+
+TEST(RestoreSchedulerStubIntegration, DefaultStubsRestoreEmptyArchive) {
+    TempDir archive_tmp;
+    TempDir restore_tmp;
+    const auto archive_path = archive_tmp.path() + "/archive.dat";
+
+    auto writer = create_archive(archive_path);
+    ASSERT_NE(writer, nullptr);
+    ASSERT_EQ(writer->commit().status, Status::SUCCESS);
+
+    TaskManager task_mgr;
+    RestoreRequest req;
+    req.archive_path = archive_path;
+    req.target_path = restore_tmp.path();
+
+    auto reader = open_archive(archive_path);
+    auto restorer = create_restorer();
+    RestoreScheduler scheduler(task_mgr, *reader, *restorer);
+
+    const auto task_id = task_mgr.create_restore_task(req);
+    Result result = scheduler.run(task_id, req);
+
+    EXPECT_EQ(result.status, Status::SUCCESS);
+    EXPECT_EQ(task_mgr.get_task(task_id).status, TaskStatus::SUCCESS);
 }
