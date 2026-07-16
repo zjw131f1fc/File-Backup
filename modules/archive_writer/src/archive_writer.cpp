@@ -144,7 +144,7 @@ public:
     }
 
     Result abort() override {
-        if (state_ == State::ABORTED) {
+        if (state_ != State::ACTIVE) {
             return failed("writer is no longer active");
         }
 
