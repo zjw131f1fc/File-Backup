@@ -79,6 +79,14 @@ bool is_inside(const std::filesystem::path& child,
     return !relative.empty() && relative != "." && relative.native().rfind("..", 0) != 0;
 }
 
+bool is_same_or_inside(const std::filesystem::path& child,
+                       const std::filesystem::path& parent) {
+    const auto normalized_child = normalized_path(child);
+    const auto normalized_parent = normalized_path(parent);
+    return normalized_child == normalized_parent ||
+        is_inside(normalized_child, normalized_parent);
+}
+
 bool read_string(const json& object,
                  const char* key,
                  std::string& value) {
@@ -550,7 +558,8 @@ ApiResponse WebApi::handle(const std::string& method,
     }
     const auto target_path = std::filesystem::path(restore.target_path);
     const auto parent = target_path.parent_path().empty() ? std::filesystem::path(".") : target_path.parent_path();
-    if (!is_writable_directory(parent) || is_inside(restore.archive_path, target_path)) {
+    if (!is_writable_directory(parent) ||
+        is_same_or_inside(restore.archive_path, target_path)) {
         return error_response(422, "INVALID_PATH", "target_path is not writable or contains archive_path");
     }
     const TaskSubmission submission = runtime_.submit_restore(restore);
