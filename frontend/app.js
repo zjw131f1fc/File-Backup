@@ -356,7 +356,7 @@
     return {
       include_paths: splitPatterns($("#include-paths").value),
       exclude_paths: splitPatterns($("#exclude-paths").value),
-      include_types: $$('[name="include_types"]:checked').map(input => input.value),
+      include_types: $("#include-all-types").checked ? [] : $$('[name="include_types"]:checked').map(input => input.value),
       include_names: splitPatterns($("#include-names").value),
       exclude_names: splitPatterns($("#exclude-names").value),
       newer_than_sec: newer,
@@ -600,6 +600,24 @@
       if (name === "create-picker-directory") createPickerDirectory();
     });
     $("#task-form").addEventListener("submit", submitTask);
+    const allTypes = $("#include-all-types");
+    const typeInputs = $$('[name="include_types"]');
+    const syncTypeFilter = () => {
+      if (allTypes.checked) {
+        typeInputs.forEach(input => { input.checked = false; input.disabled = true; });
+      } else if (!typeInputs.some(input => input.checked)) {
+        allTypes.checked = true;
+        syncTypeFilter();
+      } else {
+        typeInputs.forEach(input => { input.disabled = false; });
+      }
+    };
+    allTypes.addEventListener("change", () => {
+      if (!allTypes.checked) typeInputs.forEach(input => { input.checked = true; });
+      syncTypeFilter();
+    });
+    typeInputs.forEach(input => input.addEventListener("change", syncTypeFilter));
+    syncTypeFilter();
     $("#drawer-backdrop").addEventListener("click", closeDrawer);
     $("#path-backdrop").addEventListener("click", closePathPicker);
     document.addEventListener("keydown", event => {

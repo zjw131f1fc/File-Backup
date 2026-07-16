@@ -209,9 +209,11 @@ h2 { margin-top: 7px; font-size: 17px; letter-spacing: -.015em; }
 .input-action:hover { background: var(--teal-soft); }
 .filter-row { margin-top: 23px; }
 .type-fieldset { margin: 0; padding: 0; border: 0; }
+.type-fieldset > small { display: block; margin-top: 7px; color: var(--muted-light); font-size: 10px; }
 .type-options { display: flex; flex-wrap: wrap; gap: 9px; }
 .check-control { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfc; color: var(--muted); font-size: 11px; cursor: pointer; }
 .check-control:has(input:checked) { border-color: #96d1ca; background: var(--teal-soft); color: var(--teal-dark); }
+.check-control:has(input:disabled) { opacity: .55; cursor: not-allowed; }
 .check-control input { accent-color: var(--teal); }
 .policy-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
 .policy-option { display: flex; align-items: flex-start; gap: 10px; min-height: 70px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }

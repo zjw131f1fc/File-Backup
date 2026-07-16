@@ -296,12 +296,16 @@
                 <fieldset class="type-fieldset">
                   <legend>包含类型</legend>
                   <div class="type-options">
+                    <label class="check-control"><input id="include-all-types" type="checkbox" checked><span>全部类型</span></label>
                     <label class="check-control"><input type="checkbox" name="include_types" value="REGULAR_FILE"><span>普通文件</span></label>
                     <label class="check-control"><input type="checkbox" name="include_types" value="DIRECTORY"><span>目录</span></label>
                     <label class="check-control"><input type="checkbox" name="include_types" value="SYMBOLIC_LINK"><span>符号链接</span></label>
                     <label class="check-control"><input type="checkbox" name="include_types" value="HARD_LINK"><span>硬链接</span></label>
                     <label class="check-control"><input type="checkbox" name="include_types" value="FIFO"><span>FIFO</span></label>
+                    <label class="check-control"><input type="checkbox" name="include_types" value="CHARACTER_DEVICE"><span>字符设备</span></label>
+                    <label class="check-control"><input type="checkbox" name="include_types" value="BLOCK_DEVICE"><span>块设备</span></label>
                   </div>
+                  <small>默认包含全部支持的类型；关闭后可单独选择。</small>
                 </fieldset>
               </div>
               <div class="filter-grid filter-grid-three">
