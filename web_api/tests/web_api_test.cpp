@@ -433,6 +433,22 @@ TEST(WebApiContract, RejectsFilesystemPathOutsideAllowedRoots) {
     EXPECT_EQ(response_json(response)["error"]["code"], "PATH_NOT_ALLOWED");
 }
 
+TEST(WebApiContract, FilesystemEntriesAreUnrestrictedWithoutConfiguredRoots) {
+    TempDir temp;
+    temp.create_file("visible.txt", "data");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    ApiConfig config;
+    config.allowed_roots.clear();
+    WebApi api(runtime, config);
+
+    const auto response = api.handle(
+        "GET", "/api/filesystem/entries?path=" + temp.path());
+
+    EXPECT_EQ(response.status, 200);
+    EXPECT_EQ(response_json(response)["entries"].size(), 1u);
+}
+
 TEST(WebApiContract, ReturnsTaskEventsAsSse) {
     TempDir temp;
     TaskManager task_manager;

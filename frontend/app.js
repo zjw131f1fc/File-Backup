@@ -42,7 +42,7 @@
     bannerDismissed: false,
     selectedTask: null,
     pickerTarget: null,
-    pickerPath: "/home/user"
+    pickerPath: "/"
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -69,6 +69,7 @@
       return body;
     },
     health() { return this.request("/api/health"); },
+    roots() { return this.request("/api/filesystem/roots"); },
     tasks() { return this.request("/api/tasks"); },
     createBackup(payload) { return this.request("/api/backup", { method: "POST", body: JSON.stringify(payload) }); },
     createRestore(payload) { return this.request("/api/restore", { method: "POST", body: JSON.stringify(payload) }); },
@@ -436,6 +437,8 @@
       await api.health();
       state.apiOnline = true;
       setServiceState(true);
+      const roots = await api.roots();
+      if (roots?.roots?.length) state.pickerPath = roots.roots[0].path;
       await loadTasks(false);
       toast("已刷新任务状态。");
     } catch (_) {

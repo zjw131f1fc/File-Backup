@@ -417,7 +417,7 @@ GET /api/filesystem/entries?path=/home/user
 | `OUTPUT_EXISTS` | 备份目标归档已存在 |
 | `OUTPUT_CONFLICT` | 并发任务正在使用相同输出归档 |
 | `QUEUE_FULL` | worker 和等待队列均已达到上限 |
-| `PATH_NOT_ALLOWED` | 路径不在服务端允许的根目录内 |
+| `PATH_NOT_ALLOWED` | 启用目录限制时，路径不在服务端允许的根目录内 |
 | `INVALID_FILTER` | 筛选条件之间存在矛盾 |
 | `TASK_NOT_FOUND` | 任务 ID 不存在 |
 | `TASK_CONFLICT` | 当前任务状态不允许操作 |
@@ -428,7 +428,7 @@ GET /api/filesystem/entries?path=/home/user
 
 - 默认只监听 `127.0.0.1`，不直接暴露到局域网。
 - 所有路径由后端规范化和校验，不能仅依赖前端校验。
-- 文件浏览接口必须限制在允许的本机路径范围内，不能通过 `..` 越界。
+- 本地开发默认不限制文件浏览范围；部署时可通过一个或多个 `--root PATH` 启用允许目录限制，不能通过 `..` 越界。
 - `source_path`、`output_path`、`archive_path` 和 `target_path` 的关系校验必须使用规范化后的路径，不能只比较字符串前缀。
 - 备份默认不覆盖已有归档，避免重复点击造成数据丢失。
 - 不提供任意文件内容下载、任意命令执行或底层归档流接口。

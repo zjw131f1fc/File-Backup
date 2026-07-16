@@ -106,7 +106,6 @@ trap cleanup EXIT INT TERM
 
 SERVER_ARGS=(
     --port "$API_PORT"
-    --root "$ROOT_DIR"
     --origin "http://127.0.0.1:$FRONTEND_PORT"
 )
 for root in "${EXTRA_ROOTS[@]}"; do

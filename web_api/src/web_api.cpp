@@ -356,11 +356,7 @@ json filesystem_entry_json(const std::filesystem::directory_entry& entry) {
 }  // namespace
 
 WebApi::WebApi(TaskRuntime& runtime, ApiConfig config)
-    : runtime_(runtime), config_(std::move(config)) {
-    if (config_.allowed_roots.empty()) {
-        config_.allowed_roots.push_back(std::filesystem::current_path().string());
-    }
-}
+    : runtime_(runtime), config_(std::move(config)) {}
 
 ApiResponse WebApi::handle(const std::string& method,
                            const std::string& target,
@@ -440,7 +436,8 @@ ApiResponse WebApi::handle(const std::string& method,
         if (requested_path.empty()) {
             return error_response(400, "INVALID_REQUEST", "path is required");
         }
-        if (!is_allowed_path(requested_path, config_.allowed_roots)) {
+        if (!config_.allowed_roots.empty() &&
+            !is_allowed_path(requested_path, config_.allowed_roots)) {
             return error_response(403, "PATH_NOT_ALLOWED", "path is outside allowed roots");
         }
         if (!is_directory(requested_path)) {

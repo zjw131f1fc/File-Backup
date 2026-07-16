@@ -30,7 +30,6 @@ bool parse_port(const char* value, int& port) {
 
 int main(int argc, char** argv) {
     backup::ApiConfig config;
-    config.allowed_roots.push_back(std::filesystem::current_path().string());
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
         if (argument == "--port" && index + 1 < argc) {
