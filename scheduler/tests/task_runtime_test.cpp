@@ -9,6 +9,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -17,6 +18,74 @@ using namespace backup;
 using namespace backup::testing;
 
 namespace {
+
+struct BlockingScannerState {
+    std::mutex mutex;
+    std::condition_variable condition;
+    int entered = 0;
+    bool release = false;
+};
+
+class BlockingScanner final : public IScanner {
+public:
+    explicit BlockingScanner(std::shared_ptr<BlockingScannerState> state)
+        : state_(std::move(state)) {}
+
+    Result scan_and_backup(const std::string&, IFilter&, IArchiveWriter&,
+                           ProgressCallback progress_callback) override {
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            ++state_->entered;
+        }
+        state_->condition.notify_all();
+
+        {
+            std::unique_lock<std::mutex> lock(state_->mutex);
+            state_->condition.wait(lock, [this] { return state_->release; });
+        }
+
+        Progress progress;
+        progress.stage = "scanning";
+        if (!progress_callback(progress)) {
+            Result result;
+            result.status = Status::CANCELLED;
+            result.message = "scan cancelled";
+            return result;
+        }
+        return {};
+    }
+
+private:
+    std::shared_ptr<BlockingScannerState> state_;
+};
+
+class PassThroughFilter final : public IFilter {
+public:
+    bool should_include(const EntryInfo&) override { return true; }
+};
+
+class SuccessfulArchiveWriter final : public IArchiveWriter {
+public:
+    Result add_entry(const EntryInfo&, std::istream&) override { return {}; }
+    Result add_entry(const EntryInfo&) override { return {}; }
+    Result commit() override { return {}; }
+    Result abort() override { return {}; }
+};
+
+TaskRuntimeFactories blocking_factories(
+    const std::shared_ptr<BlockingScannerState>& state) {
+    TaskRuntimeFactories factories;
+    factories.scanner = [state] {
+        return std::make_unique<BlockingScanner>(state);
+    };
+    factories.filter = [](const FilterRules&) {
+        return std::make_unique<PassThroughFilter>();
+    };
+    factories.archive_writer = [](const std::string&) {
+        return std::make_unique<SuccessfulArchiveWriter>();
+    };
+    return factories;
+}
 
 Task wait_for_terminal(TaskManager& task_manager, const std::string& task_id) {
     for (int attempt = 0; attempt < 100; ++attempt) {
@@ -216,6 +285,74 @@ TEST(TaskRuntime, RunsMultipleTasks) {
               TaskStatus::SUCCESS);
     EXPECT_EQ(runtime.queued_task_count(), 0u);
 
+    runtime.shutdown();
+}
+
+TEST(TaskRuntime, RunsTasksConcurrentlyAcrossWorkers) {
+    auto state = std::make_shared<BlockingScannerState>();
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 2, 4, blocking_factories(state));
+    runtime.start();
+
+    BackupRequest first;
+    first.source_path = "/source-1";
+    first.output_path = "/archive-1";
+    BackupRequest second = first;
+    second.source_path = "/source-2";
+    second.output_path = "/archive-2";
+
+    const auto first_submission = runtime.submit_backup(first);
+    const auto second_submission = runtime.submit_backup(second);
+    ASSERT_TRUE(first_submission.accepted());
+    ASSERT_TRUE(second_submission.accepted());
+
+    {
+        std::unique_lock<std::mutex> lock(state->mutex);
+        ASSERT_TRUE(state->condition.wait_for(lock, std::chrono::seconds(1),
+            [&] { return state->entered == 2; }));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->release = true;
+    }
+    state->condition.notify_all();
+
+    EXPECT_EQ(wait_for_terminal(task_manager, first_submission.task_id).status,
+              TaskStatus::SUCCESS);
+    EXPECT_EQ(wait_for_terminal(task_manager, second_submission.task_id).status,
+              TaskStatus::SUCCESS);
+    runtime.shutdown();
+}
+
+TEST(TaskRuntime, CancelsRunningBackupThroughProgressCallback) {
+    auto state = std::make_shared<BlockingScannerState>();
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 2, blocking_factories(state));
+    runtime.start();
+
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+    const auto submission = runtime.submit_backup(request);
+    ASSERT_TRUE(submission.accepted());
+
+    {
+        std::unique_lock<std::mutex> lock(state->mutex);
+        ASSERT_TRUE(state->condition.wait_for(lock, std::chrono::seconds(1),
+            [&] { return state->entered == 1; }));
+    }
+    ASSERT_TRUE(runtime.cancel_task(submission.task_id));
+
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->release = true;
+    }
+    state->condition.notify_all();
+
+    const auto task = wait_for_terminal(task_manager, submission.task_id);
+    EXPECT_EQ(task.status, TaskStatus::CANCELLED);
+    EXPECT_EQ(task.result.status, Status::CANCELLED);
     runtime.shutdown();
 }
 
