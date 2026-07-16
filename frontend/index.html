@@ -19,19 +19,19 @@
         </div>
       </div>
 
-      <div class="sidebar-heading">工作台</div>
+      <div class="sidebar-heading">数据保护</div>
       <nav class="main-nav">
         <button class="nav-item is-active" data-view="dashboard" type="button">
           <span class="nav-symbol" aria-hidden="true">⌂</span>
-          <span>任务总览</span>
+          <span>备份概览</span>
         </button>
         <button class="nav-item" data-view="create" data-mode="backup" type="button">
           <span class="nav-symbol" aria-hidden="true">↑</span>
-          <span>新建备份</span>
+          <span>创建备份</span>
         </button>
         <button class="nav-item" data-view="create" data-mode="restore" type="button">
           <span class="nav-symbol" aria-hidden="true">↓</span>
-          <span>新建还原</span>
+          <span>恢复数据</span>
         </button>
       </nav>
 
@@ -55,9 +55,9 @@
           <strong>File Backup</strong>
         </div>
         <div class="topbar-context">
-          <span class="context-kicker">本机备份控制台</span>
+          <span class="context-kicker">本机数据保护</span>
           <span class="context-separator">/</span>
-          <span id="topbar-location">任务总览</span>
+          <span id="topbar-location">备份概览</span>
         </div>
         <div class="topbar-actions">
           <div class="api-status" id="api-status">
@@ -72,45 +72,60 @@
 
       <div class="api-banner is-hidden" id="api-banner">
         <span class="banner-symbol" aria-hidden="true">!</span>
-        <span>后端 API 暂不可用，当前显示演示数据。后端启动后点击刷新即可切换。</span>
+              <span>备份服务暂不可用，当前显示演示数据。服务启动后点击刷新即可恢复真实状态。</span>
         <button class="banner-close" data-action="dismiss-banner" type="button" aria-label="关闭提示">×</button>
       </div>
 
       <section class="view is-active" id="view-dashboard" data-view-panel="dashboard">
         <div class="page-heading">
           <div>
-            <span class="eyebrow">OPERATIONS</span>
-            <h1>任务总览</h1>
-            <p>查看备份与还原任务的状态、进度和结果。</p>
+            <span class="eyebrow">DATA PROTECTION</span>
+            <h1>备份概览</h1>
+            <p>确认哪些数据已经被保护，并从最近的恢复点取回文件。</p>
           </div>
           <div class="heading-actions">
             <button class="button button-secondary" data-view="create" data-mode="restore" type="button">
-              <span aria-hidden="true">↓</span> 新建还原
+              <span aria-hidden="true">↓</span> 恢复数据
             </button>
             <button class="button button-primary" data-view="create" data-mode="backup" type="button">
-              <span aria-hidden="true">↑</span> 新建备份
+              <span aria-hidden="true">↑</span> 创建备份
             </button>
           </div>
         </div>
 
-        <div class="metric-grid" aria-label="任务统计">
+        <section class="protection-banner" aria-label="数据保护状态">
+          <div class="protection-copy">
+            <span class="eyebrow">PROTECTION STATUS</span>
+            <h2 id="protection-title">还没有备份记录</h2>
+            <p id="protection-description">创建一次备份后，这里会显示最近一次成功保护的数据。</p>
+          </div>
+          <div class="protection-meta">
+            <span class="protection-meta-label">最近备份</span>
+            <strong id="protection-latest">--</strong>
+          </div>
+          <button class="button button-primary is-hidden" id="restore-latest" data-action="restore-latest" type="button">
+            <span aria-hidden="true">↓</span> 恢复最近备份
+          </button>
+        </section>
+
+        <div class="metric-grid" aria-label="备份统计">
           <article class="metric metric-teal">
-            <div class="metric-topline"><span>活动任务</span><span class="metric-mark" aria-hidden="true">◷</span></div>
+            <div class="metric-topline"><span>正在处理</span><span class="metric-mark" aria-hidden="true">◷</span></div>
             <strong id="metric-active">0</strong>
-            <span class="metric-note">正在执行或等待</span>
+            <span class="metric-note">备份或恢复任务</span>
           </article>
           <article class="metric metric-blue">
-            <div class="metric-topline"><span>已完成</span><span class="metric-mark" aria-hidden="true">✓</span></div>
+            <div class="metric-topline"><span>成功备份</span><span class="metric-mark" aria-hidden="true">✓</span></div>
             <strong id="metric-completed">0</strong>
-            <span class="metric-note">本次运行记录</span>
+            <span class="metric-note">可作为恢复点</span>
           </article>
           <article class="metric metric-amber">
-            <div class="metric-topline"><span>需关注</span><span class="metric-mark" aria-hidden="true">!</span></div>
+            <div class="metric-topline"><span>需要处理</span><span class="metric-mark" aria-hidden="true">!</span></div>
             <strong id="metric-attention">0</strong>
             <span class="metric-note">失败或部分成功</span>
           </article>
           <article class="metric metric-slate">
-            <div class="metric-topline"><span>服务状态</span><span class="metric-mark" aria-hidden="true">●</span></div>
+            <div class="metric-topline"><span>备份服务</span><span class="metric-mark" aria-hidden="true">●</span></div>
             <strong id="metric-service">离线</strong>
             <span class="metric-note" id="metric-service-note">等待 API 响应</span>
           </article>
@@ -120,17 +135,17 @@
           <section class="panel task-panel">
             <div class="panel-heading">
               <div>
-                <span class="eyebrow">TASK QUEUE</span>
-                <h2>最近任务</h2>
+                <span class="eyebrow">RECENT ACTIVITY</span>
+                <h2>最近运行</h2>
               </div>
-              <button class="text-button" data-view="create" data-mode="backup" type="button">创建任务 <span aria-hidden="true">→</span></button>
+              <button class="text-button" data-view="create" data-mode="backup" type="button">创建备份 <span aria-hidden="true">→</span></button>
             </div>
             <div class="table-wrap">
               <table class="task-table">
                 <thead>
                   <tr>
-                    <th>任务</th>
-                    <th>类型</th>
+                    <th>数据操作</th>
+                    <th>动作</th>
                     <th>状态</th>
                     <th>进度</th>
                     <th>时间</th>
@@ -141,42 +156,53 @@
               </table>
               <div class="empty-state is-hidden" id="task-empty">
                 <div class="empty-symbol" aria-hidden="true">□</div>
-                <strong>还没有任务</strong>
-                <span>创建第一个备份或还原任务。</span>
+                <strong>还没有备份记录</strong>
+                <span>创建第一个备份，开始保护本机数据。</span>
               </div>
             </div>
           </section>
 
-          <section class="panel activity-panel">
+          <section class="panel restore-points-panel">
             <div class="panel-heading">
               <div>
-                <span class="eyebrow">ACTIVITY</span>
-                <h2>活动记录</h2>
+                <span class="eyebrow">RECOVERY POINTS</span>
+                <h2>恢复点</h2>
               </div>
-              <span class="panel-caption">最新优先</span>
+              <span class="panel-caption">成功备份</span>
             </div>
-            <div class="activity-list" id="activity-list"></div>
+            <div class="restore-point-list" id="restore-points"></div>
           </section>
         </div>
+
+        <section class="panel activity-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">RUN LOG</span>
+              <h2>运行动态</h2>
+            </div>
+            <span class="panel-caption">最新优先</span>
+          </div>
+          <div class="activity-list" id="activity-list"></div>
+        </section>
       </section>
 
       <section class="view" id="view-create" data-view-panel="create">
         <div class="page-heading compact-heading">
           <div>
-            <span class="eyebrow">NEW TASK</span>
-            <h1 id="create-title">新建备份</h1>
-            <p id="create-subtitle">选择源目录、归档位置和筛选规则。</p>
+            <span class="eyebrow">PROTECT DATA</span>
+            <h1 id="create-title">创建备份</h1>
+            <p id="create-subtitle">选择要保护的目录和保存位置。</p>
           </div>
         </div>
 
         <div class="mode-switch" role="tablist" aria-label="任务类型">
           <button class="mode-tab is-active" data-mode="backup" role="tab" aria-selected="true" type="button">
             <span class="mode-icon" aria-hidden="true">↑</span>
-            <span><strong>备份</strong><small>目录写入归档</small></span>
+            <span><strong>创建备份</strong><small>保护一个目录</small></span>
           </button>
           <button class="mode-tab" data-mode="restore" role="tab" aria-selected="false" type="button">
             <span class="mode-icon" aria-hidden="true">↓</span>
-            <span><strong>还原</strong><small>归档恢复到目录</small></span>
+            <span><strong>恢复数据</strong><small>从恢复点取回文件</small></span>
           </button>
         </div>
 
@@ -185,129 +211,132 @@
             <div class="form-section-heading">
               <div>
                 <span class="eyebrow">PATHS</span>
-                <h2 id="path-section-title">备份路径</h2>
+                <h2 id="path-section-title">要保护的数据</h2>
               </div>
               <span class="section-index">01</span>
             </div>
 
             <div class="field-grid" id="backup-fields">
               <label class="field field-wide">
-                <span>源目录 <em>*</em></span>
+                <span>要保护的目录 <em>*</em></span>
                 <div class="input-with-action">
                   <input id="source-path" name="source_path" type="text" placeholder="例如 /home/user/data" autocomplete="off">
                   <button class="input-action" data-browse-target="source-path" type="button" aria-label="选择源目录" title="选择源目录">⌕</button>
                 </div>
-                <small>将递归扫描此目录下的内容。</small>
+                <small>系统会递归保护这个目录中的内容。</small>
               </label>
               <label class="field field-wide">
-                <span>输出目录 <em>*</em></span>
+                <span>备份保存位置 <em>*</em></span>
                 <div class="input-with-action">
                   <input id="output-path" name="output_path" type="text" placeholder="例如 /backup" autocomplete="off">
                   <button class="input-action" data-browse-target="output-path" type="button" aria-label="选择输出目录" title="选择输出目录">⌕</button>
                 </div>
-                <small>归档文件会写入此目录，目录内不能位于源目录中。</small>
+                <small>备份文件会写入这里，不能位于被保护目录中。</small>
               </label>
               <label class="field">
-                <span>归档名称（可选）</span>
+                <span>备份名称（可选）</span>
                 <input id="archive-name" name="archive_name" type="text" placeholder="默认 backup.dat" autocomplete="off">
-                <small>留空时自动命名，重名会追加序号。</small>
+                <small>留空时自动命名，重复备份不会覆盖已有内容。</small>
               </label>
             </div>
 
             <div class="field-grid is-hidden" id="restore-fields">
               <label class="field field-wide">
-                <span>输入归档 <em>*</em></span>
+                <span>备份文件 <em>*</em></span>
                 <div class="input-with-action">
                   <input id="archive-path" name="archive_path" type="text" placeholder="例如 /backup/data.bak" autocomplete="off">
-                  <button class="input-action" data-browse-target="archive-path" type="button" aria-label="选择归档文件" title="选择归档文件">⌕</button>
+                  <button class="input-action" data-browse-target="archive-path" type="button" aria-label="选择备份文件" title="选择备份文件">⌕</button>
                 </div>
-                <small>还原前会校验归档格式和路径安全性。</small>
+                <small>选择一个已完成的备份文件作为恢复点。</small>
               </label>
               <label class="field field-wide">
-                <span>目标目录 <em>*</em></span>
+                <span>恢复到目录 <em>*</em></span>
                 <div class="input-with-action">
                   <input id="target-path" name="target_path" type="text" placeholder="例如 /home/user/restore" autocomplete="off">
                   <button class="input-action" data-browse-target="target-path" type="button" aria-label="选择目标目录" title="选择目标目录">⌕</button>
                 </div>
-                <small>目标目录不存在时，后端会在父目录可写的前提下创建。</small>
+                <small>目录不存在时会自动创建。</small>
               </label>
             </div>
           </section>
 
-          <section class="form-section" id="filter-section">
-            <div class="form-section-heading">
-              <div>
-                <span class="eyebrow">FILTER RULES</span>
-                <h2>筛选规则</h2>
+          <details class="form-section advanced-section" id="filter-section">
+            <summary class="advanced-heading">
+              <span>
+                <span class="eyebrow">OPTIONAL</span>
+                <strong>高级筛选</strong>
+                <small>只备份符合条件的内容</small>
+              </span>
+              <span class="advanced-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div class="advanced-content">
+              <div class="filter-grid">
+                <label class="field">
+                  <span>包含路径</span>
+                  <input id="include-paths" type="text" placeholder="src/, documents/">
+                  <small>逗号分隔，支持 glob。</small>
+                </label>
+                <label class="field">
+                  <span>排除路径</span>
+                  <input id="exclude-paths" type="text" placeholder="build/, .git/">
+                  <small>排除优先于包含。</small>
+                </label>
+                <label class="field">
+                  <span>包含名称</span>
+                  <input id="include-names" type="text" placeholder="*.cpp, *.h">
+                  <small>按文件名匹配 glob。</small>
+                </label>
+                <label class="field">
+                  <span>排除名称</span>
+                  <input id="exclude-names" type="text" placeholder="*.tmp, *.o">
+                  <small>排除优先于包含。</small>
+                </label>
               </div>
-              <span class="section-index">02</span>
+              <div class="filter-row">
+                <fieldset class="type-fieldset">
+                  <legend>包含类型</legend>
+                  <div class="type-options">
+                    <label class="check-control"><input type="checkbox" name="include_types" value="REGULAR_FILE"><span>普通文件</span></label>
+                    <label class="check-control"><input type="checkbox" name="include_types" value="DIRECTORY"><span>目录</span></label>
+                    <label class="check-control"><input type="checkbox" name="include_types" value="SYMBOLIC_LINK"><span>符号链接</span></label>
+                    <label class="check-control"><input type="checkbox" name="include_types" value="HARD_LINK"><span>硬链接</span></label>
+                    <label class="check-control"><input type="checkbox" name="include_types" value="FIFO"><span>FIFO</span></label>
+                  </div>
+                </fieldset>
+              </div>
+              <div class="filter-grid filter-grid-three">
+                <label class="field">
+                  <span>修改时间晚于</span>
+                  <input id="newer-than" type="datetime-local">
+                  <small>留空表示不限制。</small>
+                </label>
+                <label class="field">
+                  <span>修改时间早于</span>
+                  <input id="older-than" type="datetime-local">
+                  <small>留空表示不限制。</small>
+                </label>
+                <label class="field">
+                  <span>UID</span>
+                  <input id="include-uids" type="text" inputmode="numeric" placeholder="1000, 1001">
+                  <small>逗号分隔。</small>
+                </label>
+                <label class="field">
+                  <span>最小大小（字节）</span>
+                  <input id="min-size" type="number" min="0" placeholder="0">
+                </label>
+                <label class="field">
+                  <span>最大大小（字节）</span>
+                  <input id="max-size" type="number" min="0" placeholder="0">
+                </label>
+              </div>
             </div>
-            <div class="filter-grid">
-              <label class="field">
-                <span>包含路径</span>
-                <input id="include-paths" type="text" placeholder="src/, documents/">
-                <small>逗号分隔，支持 glob。</small>
-              </label>
-              <label class="field">
-                <span>排除路径</span>
-                <input id="exclude-paths" type="text" placeholder="build/, .git/">
-                <small>排除优先于包含。</small>
-              </label>
-              <label class="field">
-                <span>包含名称</span>
-                <input id="include-names" type="text" placeholder="*.cpp, *.h">
-                <small>按文件名匹配 glob。</small>
-              </label>
-              <label class="field">
-                <span>排除名称</span>
-                <input id="exclude-names" type="text" placeholder="*.tmp, *.o">
-                <small>排除优先于包含。</small>
-              </label>
-            </div>
-            <div class="filter-row">
-              <fieldset class="type-fieldset">
-                <legend>包含类型</legend>
-                <div class="type-options">
-                  <label class="check-control"><input type="checkbox" name="include_types" value="REGULAR_FILE"><span>普通文件</span></label>
-                  <label class="check-control"><input type="checkbox" name="include_types" value="DIRECTORY"><span>目录</span></label>
-                  <label class="check-control"><input type="checkbox" name="include_types" value="SYMBOLIC_LINK"><span>符号链接</span></label>
-                  <label class="check-control"><input type="checkbox" name="include_types" value="HARD_LINK"><span>硬链接</span></label>
-                  <label class="check-control"><input type="checkbox" name="include_types" value="FIFO"><span>FIFO</span></label>
-                </div>
-              </fieldset>
-            </div>
-            <div class="filter-grid filter-grid-three">
-              <label class="field">
-                <span>修改时间晚于</span>
-                <input id="newer-than" type="datetime-local">
-                <small>留空表示不限制。</small>
-              </label>
-              <label class="field">
-                <span>修改时间早于</span>
-                <input id="older-than" type="datetime-local">
-                <small>留空表示不限制。</small>
-              </label>
-              <label class="field">
-                <span>UID</span>
-                <input id="include-uids" type="text" inputmode="numeric" placeholder="1000, 1001">
-                <small>逗号分隔。</small>
-              </label>
-              <label class="field">
-                <span>最小大小（字节）</span>
-                <input id="min-size" type="number" min="0" placeholder="0">
-              </label>
-              <label class="field">
-                <span>最大大小（字节）</span>
-                <input id="max-size" type="number" min="0" placeholder="0">
-              </label>
-            </div>
-          </section>
+          </details>
 
           <section class="form-section is-hidden" id="conflict-section">
             <div class="form-section-heading">
               <div>
-                <span class="eyebrow">CONFLICT POLICY</span>
-                <h2>冲突策略</h2>
+                <span class="eyebrow">RESTORE OPTIONS</span>
+                <h2>已有文件如何处理</h2>
               </div>
               <span class="section-index">02</span>
             </div>
@@ -318,7 +347,7 @@
               </label>
               <label class="policy-option">
                 <input type="radio" name="conflict_policy" value="OVERWRITE">
-                <span><strong>覆盖</strong><small>使用归档内容替换目标</small></span>
+                <span><strong>覆盖</strong><small>使用备份内容替换目标</small></span>
               </label>
               <label class="policy-option">
                 <input type="radio" name="conflict_policy" value="RENAME">
@@ -329,7 +358,7 @@
 
           <div class="form-actions">
             <button class="button button-secondary" data-view="dashboard" type="button">取消</button>
-            <button class="button button-primary" id="submit-task" type="submit"><span aria-hidden="true">↑</span> 创建备份任务</button>
+            <button class="button button-primary" id="submit-task" type="submit"><span aria-hidden="true">↑</span> 创建备份</button>
           </div>
         </form>
       </section>

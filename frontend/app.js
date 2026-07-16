@@ -110,8 +110,34 @@
     return ({ PENDING: "等待中", RUNNING: "执行中", SUCCESS: "已完成", PARTIAL_SUCCESS: "部分成功", FAILED: "失败", CANCELLED: "已取消" })[status] || status || "未知";
   }
 
-  function typeLabel(type) { return type === "restore" ? "还原" : "备份"; }
+  function typeLabel(type) { return type === "restore" ? "恢复" : "备份"; }
   function statusClass(status) { return String(status || "").toLowerCase(); }
+
+  function taskTimestamp(task) {
+    return Date.parse(task.finished_at || task.started_at || task.created_at || "") || 0;
+  }
+
+  function sortedBackups(successOnly = false) {
+    return state.tasks
+      .filter(task => task.type === "backup" && (!successOnly || task.status === "SUCCESS"))
+      .sort((left, right) => taskTimestamp(right) - taskTimestamp(left));
+  }
+
+  function taskPath(task) {
+    return task.progress?.current_path || (task.type === "backup" ? "等待保护目录" : "等待恢复点");
+  }
+
+  function directoryOf(path) {
+    const separator = path.lastIndexOf("/");
+    return separator > 0 ? path.slice(0, separator) : "/";
+  }
+
+  function displayTaskPath(task) {
+    const path = taskPath(task);
+    return task.type === "backup" && task.status === "SUCCESS"
+      ? `保存位置 · ${directoryOf(path)}`
+      : path;
+  }
 
   function taskProgress(task) {
     if (task.status === "SUCCESS") return 100;
@@ -148,9 +174,11 @@
       if (!button.classList.contains("nav-item")) return;
       button.classList.toggle("is-active", button.dataset.view === state.view && (state.view !== "create" || button.dataset.mode === state.mode));
     });
-    $("#topbar-location").textContent = state.view === "dashboard" ? "任务总览" : (state.mode === "restore" ? "新建还原" : "新建备份");
+    $("#topbar-location").textContent = state.view === "dashboard" ? "备份概览" : (state.mode === "restore" ? "恢复数据" : "创建备份");
+    renderProtection();
     renderMetrics();
     renderTasks();
+    renderRestorePoints();
     renderActivity();
     renderCreateForm();
     renderTaskDetail();
@@ -158,11 +186,37 @@
 
   function renderMetrics() {
     const active = state.tasks.filter(task => ["PENDING", "RUNNING"].includes(task.status)).length;
-    const completed = state.tasks.filter(task => task.status === "SUCCESS").length;
+    const completed = state.tasks.filter(task => task.type === "backup" && task.status === "SUCCESS").length;
     const attention = state.tasks.filter(task => ["FAILED", "PARTIAL_SUCCESS"].includes(task.status)).length;
     $("#metric-active").textContent = active;
     $("#metric-completed").textContent = completed;
     $("#metric-attention").textContent = attention;
+  }
+
+  function renderProtection() {
+    const latest = sortedBackups(true)[0];
+    const activeBackup = state.tasks.some(task => task.type === "backup" && ["PENDING", "RUNNING"].includes(task.status));
+    const title = $("#protection-title");
+    const description = $("#protection-description");
+    const latestLabel = $("#protection-latest");
+    const restoreButton = $("#restore-latest");
+    if (latest) {
+      title.textContent = "最近一次备份已完成";
+      description.textContent = "最近一次备份已经保存，可以随时恢复数据。";
+      latestLabel.textContent = formatDateTime(latest.finished_at || latest.created_at);
+      restoreButton.classList.remove("is-hidden");
+      restoreButton.dataset.taskId = latest.task_id;
+    } else if (activeBackup) {
+      title.textContent = "正在创建第一份备份";
+      description.textContent = "备份完成后，这里会出现可用的恢复点。";
+      latestLabel.textContent = "进行中";
+      restoreButton.classList.add("is-hidden");
+    } else {
+      title.textContent = "还没有备份记录";
+      description.textContent = "创建一次备份后，这里会显示最近一次成功保护的数据。";
+      latestLabel.textContent = "--";
+      restoreButton.classList.add("is-hidden");
+    }
   }
 
   function renderTasks() {
@@ -176,16 +230,30 @@
     empty.classList.add("is-hidden");
     body.innerHTML = state.tasks.slice(0, 12).map(task => {
       const progress = taskProgress(task);
-      const path = task.progress?.current_path || (task.type === "backup" ? "等待源目录" : "等待归档");
+      const path = displayTaskPath(task);
       return `<tr data-task-id="${escapeHtml(task.task_id)}">
-        <td><div class="task-name"><span class="task-type-mark ${task.type === "restore" ? "restore" : ""}">${task.type === "restore" ? "↓" : "↑"}</span><div><strong>${escapeHtml(typeLabel(task.type))}</strong><small title="${escapeHtml(path)}">${escapeHtml(path)}</small></div></div></td>
-        <td>${task.type === "restore" ? "归档还原" : "目录备份"}</td>
+        <td><div class="task-name"><span class="task-type-mark ${task.type === "restore" ? "restore" : ""}">${task.type === "restore" ? "↓" : "↑"}</span><div><strong>${task.type === "restore" ? "恢复数据" : "保护目录"}</strong><small title="${escapeHtml(path)}">${escapeHtml(path)}</small></div></div></td>
+        <td>${task.type === "restore" ? "恢复" : "备份"}</td>
         <td><span class="status-pill ${statusClass(task.status)}">${escapeHtml(statusLabel(task.status))}</span></td>
         <td class="progress-cell"><div class="progress-track"><div class="progress-value" style="width:${progress}%"></div></div><span class="progress-text">${progress}% · ${escapeHtml(task.progress?.stage || "queued")}</span></td>
         <td>${escapeHtml(formatTime(task.finished_at || task.started_at || task.created_at))}</td>
         <td><button class="row-action" data-action="open-task" data-task-id="${escapeHtml(task.task_id)}" type="button" aria-label="查看任务详情" title="查看任务详情">›</button></td>
       </tr>`;
     }).join("");
+  }
+
+  function renderRestorePoints() {
+    const container = $("#restore-points");
+    const points = sortedBackups(true).slice(0, 5);
+    if (!points.length) {
+      container.innerHTML = '<div class="restore-point-empty">完成备份后，恢复点会显示在这里。</div>';
+      return;
+    }
+    container.innerHTML = points.map(task => `<div class="restore-point">
+      <span class="restore-point-mark" aria-hidden="true">✓</span>
+      <div class="restore-point-copy"><strong>备份 · ${escapeHtml(formatDateTime(task.finished_at || task.created_at))}</strong><small title="${escapeHtml(directoryOf(taskPath(task)))}">保存位置 · ${escapeHtml(directoryOf(taskPath(task)))}</small></div>
+      <button class="restore-point-action" data-action="restore-task" data-task-id="${escapeHtml(task.task_id)}" type="button">恢复</button>
+    </div>`).join("");
   }
 
   function renderActivity() {
@@ -204,14 +272,14 @@
 
   function renderCreateForm() {
     const restore = state.mode === "restore";
-    $("#create-title").textContent = restore ? "新建还原" : "新建备份";
-    $("#create-subtitle").textContent = restore ? "选择归档、目标目录和冲突处理策略。" : "选择源目录、归档位置和筛选规则。";
-    $("#path-section-title").textContent = restore ? "还原路径" : "备份路径";
+    $("#create-title").textContent = restore ? "恢复数据" : "创建备份";
+    $("#create-subtitle").textContent = restore ? "选择恢复点和目标目录，把文件取回本机。" : "选择要保护的目录和备份保存位置。";
+    $("#path-section-title").textContent = restore ? "恢复位置" : "保护位置";
     $("#backup-fields").classList.toggle("is-hidden", restore);
     $("#restore-fields").classList.toggle("is-hidden", !restore);
     $("#filter-section").classList.toggle("is-hidden", restore);
     $("#conflict-section").classList.toggle("is-hidden", !restore);
-    $("#submit-task").innerHTML = restore ? '<span aria-hidden="true">↓</span> 创建还原任务' : '<span aria-hidden="true">↑</span> 创建备份任务';
+    $("#submit-task").innerHTML = restore ? '<span aria-hidden="true">↓</span> 开始恢复' : '<span aria-hidden="true">↑</span> 创建备份';
     $$(".mode-tab").forEach(button => {
       const active = button.dataset.mode === state.mode;
       button.classList.toggle("is-active", active);
@@ -253,6 +321,14 @@
     if (view === "create") state.mode = mode;
     render();
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function restoreFromTask(taskId) {
+    const task = state.tasks.find(item => item.task_id === taskId);
+    if (!task) return;
+    showView("create", "restore");
+    $("#archive-path").value = taskPath(task);
+    toast("已选择最近备份，请指定恢复到的目录。");
   }
 
   function splitPatterns(value) { return value.split(",").map(item => item.trim()).filter(Boolean); }
@@ -324,14 +400,14 @@
       } else {
         const archive = $("#archive-path").value.trim();
         const target = $("#target-path").value.trim();
-        if (!archive || !target) throw new Error("请填写输入归档和目标目录。");
+        if (!archive || !target) throw new Error("请填写备份文件和恢复目录。");
         payload = { archive_path: archive, target_path: target, conflict_policy: $("[name=conflict_policy]:checked").value };
       }
       let created;
       if (state.apiOnline) {
         created = state.mode === "backup" ? await api.createBackup(payload) : await api.createRestore(payload);
         await loadTasks(false);
-        toast("任务已提交到后端。");
+        toast(state.mode === "backup" ? "备份已提交。" : "恢复已提交。");
       } else {
         created = demoCreateTask(state.mode, payload);
         toast("演示任务已创建。");
@@ -353,6 +429,9 @@
         try { return await api.task(task.task_id); } catch (_) { return task; }
       }));
       state.tasks = detailed.map(task => ({ ...task, progress: task.progress || {}, result: task.result || null }));
+      if (state.selectedTask) {
+        state.selectedTask = state.tasks.find(task => task.task_id === state.selectedTask.task_id) || null;
+      }
       render();
     } catch (error) {
       state.apiOnline = false;
@@ -507,6 +586,8 @@
       if (name === "dismiss-banner") { state.bannerDismissed = true; $("#api-banner").classList.add("is-hidden"); }
       if (name === "open-task") openTask(action.dataset.taskId);
       if (name === "cancel-task") cancelTask(action.dataset.taskId);
+      if (name === "restore-latest") restoreFromTask(action.dataset.taskId);
+      if (name === "restore-task") restoreFromTask(action.dataset.taskId);
       if (name === "close-drawer") closeDrawer();
       if (name === "load-picker-path") loadPickerPath($("#picker-path").value);
       if (name === "close-path-picker") closePathPicker();
@@ -533,7 +614,7 @@
     bindEvents();
     render();
     await refresh();
-    window.setInterval(() => { if (state.apiOnline && state.tasks.some(task => ["PENDING", "RUNNING"].includes(task.status))) loadTasks(false); }, 3000);
+    window.setInterval(() => { if (state.apiOnline && state.tasks.some(task => ["PENDING", "RUNNING"].includes(task.status))) loadTasks(false); }, 1000);
   }
 
   init();
