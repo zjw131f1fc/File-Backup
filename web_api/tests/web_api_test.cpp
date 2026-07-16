@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 #include "web_api/web_api.h"
 #include "../../tests/helpers/temp_dir.h"
+#include "modules/archive_writer/archive_writer.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <chrono>
+#include <fstream>
 #include <thread>
 
 using namespace backup;
@@ -14,6 +16,23 @@ namespace {
 
 json response_json(const ApiResponse& response) {
     return json::parse(response.body);
+}
+
+json wait_for_http_terminal(httplib::Client& client,
+                            const std::string& task_id) {
+    for (int attempt = 0; attempt < 200; ++attempt) {
+        const auto response = client.Get("/api/tasks/" + task_id);
+        if (response && response->status == 200) {
+            const auto body = json::parse(response->body);
+            const std::string status = body.value("status", "");
+            if (status == "SUCCESS" || status == "PARTIAL_SUCCESS" ||
+                status == "FAILED" || status == "CANCELLED") {
+                return body;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return json::object();
 }
 
 }  // namespace
@@ -189,6 +208,87 @@ TEST(WebApiServerContract, StreamsTaskEventsOverHttp) {
     const auto missing_events = events_client.Get("/api/tasks/missing/events");
     ASSERT_TRUE(missing_events);
     EXPECT_EQ(missing_events->status, 404);
+    server.stop();
+}
+
+TEST(WebApiServerContract, CompletesBackupOverHttp) {
+    TempDir temp;
+    const std::string source = temp.create_dir("source");
+    temp.create_file("source/file.txt", "backup content");
+    const std::string archive = temp.path() + "/backup.dat";
+
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    ApiConfig config;
+    config.port = 0;
+    WebApiServer server(runtime, config);
+    ASSERT_TRUE(server.start());
+
+    httplib::Client client("127.0.0.1", server.port());
+    const auto response = client.Post(
+        "/api/backup",
+        json{
+            {"source_path", source},
+            {"output_path", archive},
+            {"filter_rules", json::object()}
+        }.dump(),
+        "application/json");
+    ASSERT_TRUE(response);
+    ASSERT_EQ(response->status, 202);
+
+    const std::string task_id = json::parse(response->body)["task_id"];
+    const auto task = wait_for_http_terminal(client, task_id);
+    ASSERT_FALSE(task.empty());
+    EXPECT_EQ(task["status"], "SUCCESS");
+    EXPECT_TRUE(std::filesystem::exists(archive));
+    server.stop();
+}
+
+TEST(WebApiServerContract, CompletesRestoreOverHttp) {
+    TempDir temp;
+    const std::string input = temp.create_file("input.txt", "restore content");
+    const std::string archive = temp.path() + "/backup.dat";
+    const std::string target = temp.create_dir("restore");
+
+    auto writer = create_archive(archive);
+    ASSERT_NE(writer, nullptr);
+    EntryInfo entry;
+    entry.path = "restored.txt";
+    entry.type = EntryType::REGULAR_FILE;
+    entry.size = std::string("restore content").size();
+    std::ifstream content(input, std::ios::binary);
+    ASSERT_TRUE(content);
+    ASSERT_EQ(writer->add_entry(entry, content).status, Status::SUCCESS);
+    ASSERT_EQ(writer->commit().status, Status::SUCCESS);
+
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    ApiConfig config;
+    config.port = 0;
+    WebApiServer server(runtime, config);
+    ASSERT_TRUE(server.start());
+
+    httplib::Client client("127.0.0.1", server.port());
+    const auto response = client.Post(
+        "/api/restore",
+        json{
+            {"archive_path", archive},
+            {"target_path", target},
+            {"conflict_policy", "OVERWRITE"}
+        }.dump(),
+        "application/json");
+    ASSERT_TRUE(response);
+    ASSERT_EQ(response->status, 202);
+
+    const std::string task_id = json::parse(response->body)["task_id"];
+    const auto task = wait_for_http_terminal(client, task_id);
+    ASSERT_FALSE(task.empty());
+    EXPECT_EQ(task["status"], "SUCCESS");
+
+    std::ifstream restored(target + "/restored.txt", std::ios::binary);
+    ASSERT_TRUE(restored);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(restored), {}),
+              "restore content");
     server.stop();
 }
 
