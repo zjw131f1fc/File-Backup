@@ -50,6 +50,7 @@ Web 层需要一个 `TaskRuntime`（可以是 Web 服务内部组件，也可以
 | 状态码 | 使用场景 |
 |---:|---|
 | `200` | 查询成功、取消结果、健康检查 |
+| `201` | 目录创建成功 |
 | `202` | 任务已创建并进入等待队列 |
 | `400` | JSON 格式或字段类型错误 |
 | `404` | 任务或路径不存在 |
@@ -393,6 +394,35 @@ GET /api/filesystem/entries?path=/home/user
 
 该接口只用于 UI 选择路径，不替代 Scanner，也不跟随符号链接进入目录。`path` 必须位于服务端允许的根目录下，并在规范化后再次检查，防止 `..` 越界。目录不存在或无权限时返回 `404` 或 `422`。
 
+### 4.3 创建目录
+
+```http
+POST /api/filesystem/directories
+```
+
+请求体：
+
+```json
+{
+  "parent_path": "/backup",
+  "name": "daily"
+}
+```
+
+`name` 只能是单个目录名，不能包含 `/`、绝对路径或 `..`。父目录必须存在且可写；启用允许根目录限制时，父目录必须位于允许根目录内。
+
+成功返回 `201 Created`：
+
+```json
+{
+  "path": "/backup/daily",
+  "name": "daily",
+  "type": "directory"
+}
+```
+
+目录已存在时返回 `409 DIRECTORY_EXISTS`。创建成功后，前端应重新加载父目录或直接打开新目录。
+
 ## 5. 错误响应
 
 所有错误使用统一格式：
@@ -418,6 +448,8 @@ GET /api/filesystem/entries?path=/home/user
 | `OUTPUT_CONFLICT` | 并发任务正在使用相同输出归档 |
 | `QUEUE_FULL` | worker 和等待队列均已达到上限 |
 | `PATH_NOT_ALLOWED` | 启用目录限制时，路径不在服务端允许的根目录内 |
+| `DIRECTORY_EXISTS` | 要创建的目录已存在 |
+| `DIRECTORY_CREATE_FAILED` | 目录创建失败 |
 | `INVALID_FILTER` | 筛选条件之间存在矛盾 |
 | `TASK_NOT_FOUND` | 任务 ID 不存在 |
 | `TASK_CONFLICT` | 当前任务状态不允许操作 |

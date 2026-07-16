@@ -224,6 +224,43 @@ TEST(ProjectAcceptance, HealthCapabilitiesFilesystemAndCorsWorkOverHttp) {
               "GET, POST, OPTIONS");
 }
 
+TEST(ProjectAcceptance, CreatesAndListsDirectoriesOverHttp) {
+    HttpHarness harness;
+    ASSERT_TRUE(harness.start());
+    auto client = harness.client();
+    const auto create = client.Post(
+        "/api/filesystem/directories",
+        json{{"parent_path", harness.temp.path()}, {"name", "new-folder"}}.dump(),
+        "application/json");
+    ASSERT_TRUE(create);
+    ASSERT_EQ(create->status, 201);
+    const auto created_body = response_body(create);
+    const std::string created_path = created_body["path"];
+    EXPECT_EQ(created_body["type"], "directory");
+    EXPECT_TRUE(std::filesystem::is_directory(created_path));
+
+    const auto entries = client.Get(
+        "/api/filesystem/entries?path=" + url_encode(harness.temp.path()));
+    ASSERT_TRUE(entries);
+    EXPECT_NE(response_body(entries).dump().find("new-folder"), std::string::npos);
+
+    const auto duplicate = client.Post(
+        "/api/filesystem/directories",
+        json{{"parent_path", harness.temp.path()}, {"name", "new-folder"}}.dump(),
+        "application/json");
+    ASSERT_TRUE(duplicate);
+    EXPECT_EQ(duplicate->status, 409);
+    EXPECT_EQ(response_body(duplicate)["error"]["code"], "DIRECTORY_EXISTS");
+
+    const auto invalid_name = client.Post(
+        "/api/filesystem/directories",
+        json{{"parent_path", harness.temp.path()}, {"name", "nested/folder"}}.dump(),
+        "application/json");
+    ASSERT_TRUE(invalid_name);
+    EXPECT_EQ(invalid_name->status, 400);
+    EXPECT_EQ(response_body(invalid_name)["error"]["code"], "INVALID_REQUEST");
+}
+
 TEST(ProjectAcceptance, BacksUpAndRestoresFilesLinksFifoAndMetadataOverHttp) {
     HttpHarness harness;
     ASSERT_TRUE(harness.start());

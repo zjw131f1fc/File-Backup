@@ -75,6 +75,13 @@ bool valid_archive_name(const std::string& name) {
         name != "." && name != "..";
 }
 
+bool valid_directory_name(const std::string& name) {
+    if (name.empty()) return false;
+    const std::filesystem::path path(name);
+    return !path.is_absolute() && path.filename().string() == name &&
+        name != "." && name != "..";
+}
+
 std::filesystem::path normalized_path(const std::filesystem::path& path) {
     std::error_code error;
     auto result = std::filesystem::weakly_canonical(path, error);
@@ -456,6 +463,55 @@ ApiResponse WebApi::handle(const std::string& method,
             return left["name"].get<std::string>() < right["name"].get<std::string>();
         });
         return json_response(200, {{"path", normalized_path(requested_path).string()}, {"entries", entries}});
+    }
+
+    if (method == "POST" && path == "/api/filesystem/directories") {
+        json request;
+        try {
+            request = json::parse(body);
+        } catch (const json::exception&) {
+            return error_response(400, "INVALID_JSON", "request body is not valid JSON");
+        }
+        if (!request.is_object()) {
+            return error_response(400, "INVALID_REQUEST", "request body must be an object");
+        }
+
+        std::string parent_path;
+        std::string name;
+        if (!read_string(request, "parent_path", parent_path) ||
+            !read_string(request, "name", name) ||
+            !valid_directory_name(name)) {
+            return error_response(400, "INVALID_REQUEST",
+                                  "parent_path and a single directory name are required");
+        }
+        if (!config_.allowed_roots.empty() &&
+            !is_allowed_path(parent_path, config_.allowed_roots)) {
+            return error_response(403, "PATH_NOT_ALLOWED", "path is outside allowed roots");
+        }
+        if (!is_directory(parent_path) || !is_writable_directory(parent_path)) {
+            return error_response(422, "INVALID_PATH",
+                                  "parent_path must be a writable directory");
+        }
+
+        const auto target = normalized_path(std::filesystem::path(parent_path) / name);
+        std::error_code status_error;
+        const auto target_status = std::filesystem::symlink_status(target, status_error);
+        if (!status_error &&
+            target_status.type() != std::filesystem::file_type::not_found) {
+            return error_response(409, "DIRECTORY_EXISTS", "directory already exists");
+        }
+
+        std::error_code create_error;
+        if (!std::filesystem::create_directory(target, create_error)) {
+            return error_response(422, "DIRECTORY_CREATE_FAILED",
+                                  create_error ? create_error.message()
+                                               : "directory could not be created");
+        }
+        return json_response(201, {
+            {"path", target.string()},
+            {"name", target.filename().string()},
+            {"type", "directory"}
+        });
     }
 
     if (method == "GET" && path.rfind("/api/tasks/", 0) == 0) {

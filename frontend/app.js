@@ -71,6 +71,12 @@
     health() { return this.request("/api/health"); },
     roots() { return this.request("/api/filesystem/roots"); },
     tasks() { return this.request("/api/tasks"); },
+    createDirectory(parentPath, name) {
+      return this.request("/api/filesystem/directories", {
+        method: "POST",
+        body: JSON.stringify({ parent_path: parentPath, name })
+      });
+    },
     createBackup(payload) { return this.request("/api/backup", { method: "POST", body: JSON.stringify(payload) }); },
     createRestore(payload) { return this.request("/api/restore", { method: "POST", body: JSON.stringify(payload) }); },
     task(id) { return this.request(`/api/tasks/${encodeURIComponent(id)}`); },
@@ -402,7 +408,7 @@
   }
 
   async function loadPickerPath(path) {
-    const normalized = path.trim() || "/home/user";
+    const normalized = path.trim() || "/";
     try {
       const data = state.apiOnline ? await api.entries(normalized) : demoEntries(normalized);
       state.pickerPath = data.path || normalized;
@@ -415,9 +421,12 @@
 
   function openPathPicker(target) {
     state.pickerTarget = target;
+    const targetValue = $("#" + target)?.value.trim();
+    if (targetValue) state.pickerPath = targetValue;
     $("#path-modal").classList.remove("is-hidden");
     $("#path-backdrop").classList.remove("is-hidden");
     $("#picker-path").value = state.pickerPath;
+    $("#picker-new-folder").value = "";
     loadPickerPath(state.pickerPath);
   }
 
@@ -430,6 +439,28 @@
   function selectPickerPath() {
     if (state.pickerTarget) $("#" + state.pickerTarget).value = state.pickerPath;
     closePathPicker();
+  }
+
+  async function createPickerDirectory() {
+    const name = $("#picker-new-folder").value.trim();
+    if (!name) {
+      toast("请输入文件夹名称。", true);
+      return;
+    }
+    if (!state.apiOnline) {
+      toast("后端 API 不可用，演示模式不能创建文件夹。", true);
+      return;
+    }
+    try {
+      const created = await api.createDirectory(state.pickerPath, name);
+      state.pickerPath = created.path;
+      if (state.pickerTarget) $("#" + state.pickerTarget).value = state.pickerPath;
+      $("#picker-new-folder").value = "";
+      await loadPickerPath(state.pickerPath);
+      toast("文件夹已创建。");
+    } catch (error) {
+      toast(error.message || "文件夹创建失败。", true);
+    }
   }
 
   async function refresh() {
@@ -460,7 +491,11 @@
       const pickerEntry = event.target.closest("[data-picker-path]");
       if (pickerEntry) {
         if (pickerEntry.dataset.pickerType === "directory") loadPickerPath(pickerEntry.dataset.pickerPath);
-        else { state.pickerPath = pickerEntry.dataset.pickerPath; $("#picker-path").value = state.pickerPath; $("#picker-location").textContent = state.pickerPath; }
+        else if (state.pickerTarget === "archive-path") {
+          state.pickerPath = pickerEntry.dataset.pickerPath;
+          $("#picker-path").value = state.pickerPath;
+          $("#picker-location").textContent = state.pickerPath;
+        } else toast("当前字段需要选择目录。", true);
         return;
       }
       const browseButton = event.target.closest("[data-browse-target]");
@@ -476,11 +511,22 @@
       if (name === "load-picker-path") loadPickerPath($("#picker-path").value);
       if (name === "close-path-picker") closePathPicker();
       if (name === "select-picker-path") selectPickerPath();
+      if (name === "create-picker-directory") createPickerDirectory();
     });
     $("#task-form").addEventListener("submit", submitTask);
     $("#drawer-backdrop").addEventListener("click", closeDrawer);
     $("#path-backdrop").addEventListener("click", closePathPicker);
-    document.addEventListener("keydown", event => { if (event.key === "Escape") { closeDrawer(); closePathPicker(); } });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") { closeDrawer(); closePathPicker(); }
+      if (event.key === "Enter" && event.target.id === "picker-path") {
+        event.preventDefault();
+        loadPickerPath(event.target.value);
+      }
+      if (event.key === "Enter" && event.target.id === "picker-new-folder") {
+        event.preventDefault();
+        createPickerDirectory();
+      }
+    });
   }
 
   async function init() {

@@ -219,6 +219,8 @@ h2 { margin-top: 7px; font-size: 17px; letter-spacing: -.015em; }
 .detail-message.failed { border-left-color: var(--red); background: var(--red-soft); }
 .path-modal { position: fixed; z-index: 12; top: 50%; left: 50%; width: min(560px, calc(100vw - 28px)); max-height: min(680px, calc(100vh - 40px)); overflow: hidden; padding: 25px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: 0 20px 60px rgba(23,38,47,.18); transform: translate(-50%, -50%); }
 .picker-toolbar { display: flex; gap: 8px; margin-top: 23px; }
+.picker-toolbar input, .picker-create input { min-width: 0; flex: 1; }
+.picker-create { display: flex; gap: 8px; margin-top: 9px; }
 .picker-location { margin-top: 15px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .picker-list { min-height: 180px; max-height: 330px; overflow-y: auto; margin-top: 9px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .picker-entry { display: flex; align-items: center; justify-content: space-between; gap: 15px; width: 100%; min-height: 45px; padding: 0 8px; border: 0; border-bottom: 1px solid #edf1f0; background: transparent; color: var(--ink); text-align: left; font-size: 12px; }
