@@ -261,12 +261,13 @@ TEST(ScannerContract, ScanSourceNotFound) {
 
 TEST(ScannerContract, ReportsCumulativeProgress) {
     TempDir tmp;
+    TempDir archive_tmp;
     tmp.create_file("one.txt", "abc");
     tmp.create_file("two.txt", "12345");
 
     auto scanner = create_scanner();
     auto filter = create_filter(FilterRules{});
-    auto writer = create_archive(tmp.path() + "/archive.dat");
+    auto writer = create_archive(archive_tmp.path() + "/archive.dat");
     Progress last;
     int callbacks = 0;
     Result r = scanner->scan_and_backup(
@@ -285,6 +286,7 @@ TEST(ScannerContract, ReportsCumulativeProgress) {
 
 TEST(ScannerContract, FilteredHardLinkNeverBecomesArchiveTarget) {
     TempDir tmp;
+    TempDir archive_tmp;
     tmp.create_file("excluded.txt", "data");
     tmp.create_hardlink("included.txt", "excluded.txt");
 
@@ -292,12 +294,12 @@ TEST(ScannerContract, FilteredHardLinkNeverBecomesArchiveTarget) {
     rules.exclude_names = {"excluded.txt"};
     auto filter = create_filter(rules);
     auto scanner = create_scanner();
-    auto writer = create_archive(tmp.path() + "/archive.dat");
+    auto writer = create_archive(archive_tmp.path() + "/archive.dat");
 
     ASSERT_EQ(scanner->scan_and_backup(tmp.path(), *filter, *writer, nullptr).status,
               Status::SUCCESS);
     ASSERT_EQ(writer->commit().status, Status::SUCCESS);
-    auto reader = open_archive(tmp.path() + "/archive.dat");
+    auto reader = open_archive(archive_tmp.path() + "/archive.dat");
     ASSERT_EQ(reader->validate().status, Status::SUCCESS);
 
     ASSERT_TRUE(reader->has_next_entry());

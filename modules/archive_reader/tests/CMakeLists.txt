@@ -4,3 +4,10 @@ target_include_directories(archive_reader_test PRIVATE ${CMAKE_SOURCE_DIR}/tests
 
 add_test(NAME archive_reader COMMAND archive_reader_test)
 set_tests_properties(archive_reader PROPERTIES LABELS "archive_reader")
+
+add_executable(archive_reader_functional_test archive_reader_functional_test.cpp)
+target_link_libraries(archive_reader_functional_test PRIVATE backup_archive_reader backup_archive_writer GTest::gtest_main)
+target_include_directories(archive_reader_functional_test PRIVATE ${CMAKE_SOURCE_DIR}/tests/helpers)
+
+add_test(NAME archive_reader_functional COMMAND archive_reader_functional_test)
+set_tests_properties(archive_reader_functional PROPERTIES LABELS "archive_reader")
