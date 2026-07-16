@@ -83,6 +83,99 @@ TEST(BackupSchedulerContract, SuccessCallsCommit) {
     EXPECT_EQ(task.status, TaskStatus::SUCCESS);
 }
 
+TEST(BackupSchedulerContract, CommitFailureAbortsArchive) {
+    TaskManager task_mgr;
+    NiceMock<MockScanner> mock_scanner;
+    NiceMock<MockFilter> mock_filter;
+    StrictMock<MockArchiveWriter> mock_writer;
+
+    Result scan_result;
+    scan_result.status = Status::SUCCESS;
+    EXPECT_CALL(mock_scanner, scan_and_backup(_, _, _, _))
+        .WillOnce(Return(scan_result));
+
+    Result commit_result;
+    commit_result.status = Status::FAILED;
+    commit_result.message = "disk full";
+    commit_result.error_count = 1;
+    EXPECT_CALL(mock_writer, commit()).WillOnce(Return(commit_result));
+
+    Result abort_result;
+    abort_result.status = Status::SUCCESS;
+    EXPECT_CALL(mock_writer, abort()).WillOnce(Return(abort_result));
+
+    BackupScheduler scheduler(task_mgr, mock_scanner, mock_filter, mock_writer);
+    BackupRequest req;
+    req.source_path = "/tmp/src";
+    req.output_path = "/tmp/archive.dat";
+    const auto task_id = task_mgr.create_backup_task(req);
+
+    const Result result = scheduler.run(task_id, req);
+    EXPECT_EQ(result.status, Status::FAILED);
+    EXPECT_EQ(result.error_count, 1);
+    EXPECT_EQ(task_mgr.get_task(task_id).status, TaskStatus::FAILED);
+}
+
+TEST(BackupSchedulerContract, PartialScanFailureAbortsArchive) {
+    TaskManager task_mgr;
+    NiceMock<MockScanner> mock_scanner;
+    NiceMock<MockFilter> mock_filter;
+    StrictMock<MockArchiveWriter> mock_writer;
+
+    Result scan_result;
+    scan_result.status = Status::PARTIAL_SUCCESS;
+    scan_result.error_count = 2;
+    EXPECT_CALL(mock_scanner, scan_and_backup(_, _, _, _))
+        .WillOnce(Return(scan_result));
+
+    Result abort_result;
+    abort_result.status = Status::SUCCESS;
+    EXPECT_CALL(mock_writer, abort()).WillOnce(Return(abort_result));
+
+    BackupScheduler scheduler(task_mgr, mock_scanner, mock_filter, mock_writer);
+    BackupRequest req;
+    req.source_path = "/tmp/src";
+    req.output_path = "/tmp/archive.dat";
+    const auto task_id = task_mgr.create_backup_task(req);
+
+    const Result result = scheduler.run(task_id, req);
+    EXPECT_EQ(result.status, Status::FAILED);
+    EXPECT_EQ(result.error_count, 2);
+    EXPECT_NE(result.message.find("partially"), std::string::npos);
+}
+
+TEST(BackupSchedulerContract, ProgressCallbackStopsAfterCancellation) {
+    TaskManager task_mgr;
+    NiceMock<MockScanner> mock_scanner;
+    NiceMock<MockFilter> mock_filter;
+    StrictMock<MockArchiveWriter> mock_writer;
+    BackupRequest req;
+    req.source_path = "/tmp/src";
+    req.output_path = "/tmp/archive.dat";
+    const auto task_id = task_mgr.create_backup_task(req);
+
+    EXPECT_CALL(mock_scanner, scan_and_backup(_, _, _, _))
+        .WillOnce(::testing::Invoke(
+            [&task_mgr, &task_id](const std::string&, IFilter&, IArchiveWriter&,
+                        ProgressCallback callback) {
+                Progress progress;
+                progress.stage = "scanning";
+                EXPECT_TRUE(task_mgr.cancel_task(task_id));
+                EXPECT_FALSE(callback(progress));
+                Result result;
+                result.status = Status::CANCELLED;
+                return result;
+            }));
+
+    Result abort_result;
+    abort_result.status = Status::SUCCESS;
+    EXPECT_CALL(mock_writer, abort()).WillOnce(Return(abort_result));
+
+    BackupScheduler scheduler(task_mgr, mock_scanner, mock_filter, mock_writer);
+    const Result result = scheduler.run(task_id, req);
+    EXPECT_EQ(result.status, Status::CANCELLED);
+}
+
 // ===== 3. 取消停止扫描 =====
 TEST(BackupSchedulerContract, CancelStopsScan) {
     TaskManager task_mgr;
