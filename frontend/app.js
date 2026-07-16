@@ -47,6 +47,10 @@
     pickerPath: "/"
   };
 
+  const ACTIVE_STATUSES = new Set(["PENDING", "RUNNING"]);
+  const FAILURE_STATUSES = new Set(["FAILED", "PARTIAL_SUCCESS"]);
+  const TERMINAL_STATUSES = new Set(["SUCCESS", "PARTIAL_SUCCESS", "FAILED", "CANCELLED"]);
+
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -141,9 +145,11 @@
       : path;
   }
 
+  function isActive(task) { return ACTIVE_STATUSES.has(task.status); }
+  function isFailure(task) { return FAILURE_STATUSES.has(task.status); }
+
   function taskProgress(task) {
-    if (task.status === "SUCCESS") return 100;
-    if (task.status === "FAILED" || task.status === "CANCELLED" || task.status === "PARTIAL_SUCCESS") return 100;
+    if (TERMINAL_STATUSES.has(task.status)) return 100;
     if (task.status === "PENDING") return 0;
     const entries = Number(task.progress?.processed_entries || 0);
     return Math.min(94, Math.max(8, Math.round(entries / 25)));
@@ -187,9 +193,9 @@
   }
 
   function renderMetrics() {
-    const active = state.tasks.filter(task => ["PENDING", "RUNNING"].includes(task.status)).length;
+    const active = state.tasks.filter(isActive).length;
     const completed = state.tasks.filter(task => task.type === "backup" && task.status === "SUCCESS").length;
-    const attention = state.tasks.filter(task => ["FAILED", "PARTIAL_SUCCESS"].includes(task.status)).length;
+    const attention = state.tasks.filter(isFailure).length;
     $("#metric-active").textContent = active;
     $("#metric-completed").textContent = completed;
     $("#metric-attention").textContent = attention;
@@ -197,7 +203,7 @@
 
   function renderProtection() {
     const latest = sortedBackups(true)[0];
-    const activeBackup = state.tasks.some(task => task.type === "backup" && ["PENDING", "RUNNING"].includes(task.status));
+    const activeBackup = state.tasks.some(task => task.type === "backup" && isActive(task));
     const title = $("#protection-title");
     const description = $("#protection-description");
     const latestLabel = $("#protection-latest");
@@ -266,7 +272,7 @@
       time: task.finished_at || task.started_at || task.created_at
     }));
     $("#activity-list").innerHTML = activity.slice(0, 6).map(item => `<div class="activity-item">
-      <span class="activity-dot ${["FAILED", "PARTIAL_SUCCESS"].includes(item.status) ? "failed" : item.status === "PENDING" ? "pending" : ""}"></span>
+      <span class="activity-dot ${FAILURE_STATUSES.has(item.status) ? "failed" : item.status === "PENDING" ? "pending" : ""}"></span>
       <div class="activity-copy"><strong>${escapeHtml(item.task_id)}</strong><span>${escapeHtml(item.message)}</span></div>
       <time class="activity-time">${escapeHtml(formatTime(item.time))}</time>
     </div>`).join("");
@@ -299,7 +305,7 @@
       return;
     }
     const progress = taskProgress(task);
-    const canCancel = ["PENDING", "RUNNING"].includes(task.status);
+    const canCancel = isActive(task);
     $("#task-detail-content").innerHTML = `<div class="detail-summary">
       <span class="detail-id">${escapeHtml(task.task_id)}</span>
       <div class="detail-status"><span class="status-pill ${statusClass(task.status)}">${escapeHtml(statusLabel(task.status))}</span></div>
@@ -311,7 +317,7 @@
       <div><span class="detail-label">处理大小</span><strong class="detail-value">${escapeHtml(formatBytes(Number(task.progress?.processed_bytes || 0)))}</strong></div>
     </div>
     <div class="detail-progress"><span class="detail-label">${escapeHtml(task.progress?.stage || "queued")} · ${progress}%</span><div class="progress-track"><div class="progress-value" style="width:${progress}%"></div></div></div>
-    <div class="detail-message ${["FAILED", "PARTIAL_SUCCESS"].includes(task.status) ? "failed" : ""}">${escapeHtml(task.result?.message || task.progress?.current_path || "任务已进入队列，等待执行。")}</div>
+    <div class="detail-message ${isFailure(task) ? "failed" : ""}">${escapeHtml(task.result?.message || task.progress?.current_path || "任务已进入队列，等待执行。")}</div>
     <div class="detail-actions">${canCancel ? '<button class="button button-secondary" data-action="cancel-task" data-task-id="' + escapeHtml(task.task_id) + '" type="button">取消任务</button>' : ""}<button class="button button-primary" data-action="close-drawer" type="button">关闭</button></div>`;
     drawer.classList.add("is-open");
     drawer.setAttribute("aria-hidden", "false");
@@ -367,6 +373,27 @@
     };
   }
 
+  function buildTaskPayload() {
+    if (state.mode === "backup") {
+      const source = $("#source-path").value.trim();
+      const output = $("#output-path").value.trim();
+      const archiveName = $("#archive-name").value.trim();
+      if (!source || !output) throw new Error("请填写源目录和输出目录。");
+      const payload = { source_path: source, output_path: output, filter_rules: buildFilterRules() };
+      if (archiveName) payload.archive_name = archiveName;
+      return payload;
+    }
+
+    const archive = $("#archive-path").value.trim();
+    const target = $("#target-path").value.trim();
+    if (!archive || !target) throw new Error("请填写备份文件和恢复目录。");
+    return { archive_path: archive, target_path: target, conflict_policy: $("[name=conflict_policy]:checked").value };
+  }
+
+  function createTask(payload) {
+    return state.mode === "backup" ? api.createBackup(payload) : api.createRestore(payload);
+  }
+
   function demoCreateTask(type, payload) {
     const id = `demo-${type}-${String(Date.now()).slice(-6)}`;
     const task = { task_id: id, type, status: "PENDING", created_at: new Date().toISOString(), source_path: type === "backup" ? payload.source_path : undefined, progress: { stage: "queued", processed_entries: 0, processed_bytes: 0, current_path: type === "backup" ? payload.source_path : payload.archive_path }, result: null };
@@ -394,23 +421,10 @@
   async function submitTask(event) {
     event.preventDefault();
     try {
-      let payload;
-      if (state.mode === "backup") {
-        const source = $("#source-path").value.trim();
-        const output = $("#output-path").value.trim();
-        const archiveName = $("#archive-name").value.trim();
-        if (!source || !output) throw new Error("请填写源目录和输出目录。");
-        payload = { source_path: source, output_path: output, filter_rules: buildFilterRules() };
-        if (archiveName) payload.archive_name = archiveName;
-      } else {
-        const archive = $("#archive-path").value.trim();
-        const target = $("#target-path").value.trim();
-        if (!archive || !target) throw new Error("请填写备份文件和恢复目录。");
-        payload = { archive_path: archive, target_path: target, conflict_policy: $("[name=conflict_policy]:checked").value };
-      }
+      const payload = buildTaskPayload();
       let created;
       if (state.apiOnline) {
-        created = state.mode === "backup" ? await api.createBackup(payload) : await api.createRestore(payload);
+        created = await createTask(payload);
         await loadTasks(false);
         toast(state.mode === "backup" ? "备份已提交。" : "恢复已提交。");
       } else {
@@ -428,12 +442,11 @@
     if (!state.apiOnline) return;
     try {
       const data = await api.tasks();
-      const summaries = data?.tasks || [];
-      const detailed = await Promise.all(summaries.map(async task => {
-        if (task.progress) return task;
-        try { return await api.task(task.task_id); } catch (_) { return task; }
+      state.tasks = (data?.tasks || []).map(task => ({
+        ...task,
+        progress: task.progress || {},
+        result: task.result || null
       }));
-      state.tasks = detailed.map(task => ({ ...task, progress: task.progress || {}, result: task.result || null }));
       if (state.selectedTask) {
         state.selectedTask = state.tasks.find(task => task.task_id === state.selectedTask.task_id) || null;
       }
@@ -448,7 +461,7 @@
 
   async function cancelTask(id) {
     const task = state.tasks.find(item => item.task_id === id);
-    if (!task || !["PENDING", "RUNNING"].includes(task.status)) return;
+    if (!task || !isActive(task)) return;
     try {
       if (state.apiOnline) await api.cancel(id);
       task.status = "CANCELLED";
@@ -637,7 +650,7 @@
     bindEvents();
     render();
     await refresh();
-    window.setInterval(() => { if (state.apiOnline && state.tasks.some(task => ["PENDING", "RUNNING"].includes(task.status))) loadTasks(false); }, 1000);
+    window.setInterval(() => { if (state.apiOnline && state.tasks.some(isActive)) loadTasks(false); }, 1000);
   }
 
   init();
