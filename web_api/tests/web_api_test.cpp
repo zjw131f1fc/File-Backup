@@ -472,6 +472,193 @@ TEST(WebApiContract, ReportsQueueFull) {
     EXPECT_EQ(response_json(response)["error"]["code"], "QUEUE_FULL");
 }
 
+TEST(WebApiContract, AcceptsCompleteFilterRules) {
+    TempDir temp;
+    const std::string source = temp.create_dir("source");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    WebApi api(runtime);
+
+    const auto response = api.handle(
+        "POST", "/api/backup", json{
+            {"source_path", source},
+            {"output_path", temp.path() + "/archive.dat"},
+            {"filter_rules", {
+                {"include_paths", {"src/*"}},
+                {"exclude_paths", {"src/tmp/*"}},
+                {"include_names", {"*.txt"}},
+                {"exclude_names", {"*.tmp"}},
+                {"include_types", {"REGULAR_FILE", "DIRECTORY"}},
+                {"include_uids", {0, 1000}},
+                {"newer_than_sec", 1},
+                {"older_than_sec", 2},
+                {"min_size", 1},
+                {"max_size", 100}
+            }}
+        }.dump());
+
+    EXPECT_EQ(response.status, 202);
+}
+
+TEST(WebApiContract, RejectsInvalidFilterShapesAndRanges) {
+    TempDir temp;
+    const std::string source = temp.create_dir("source");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    WebApi api(runtime);
+    const auto request = [&source, &temp](const json& rules) {
+        return json{
+            {"source_path", source},
+            {"output_path", temp.path() + "/archive-" +
+                std::to_string(rules.dump().size()) + ".dat"},
+            {"filter_rules", rules}
+        }.dump();
+    };
+
+    for (const auto& rules : {
+        json{{"include_paths", "src"}},
+        json{{"include_paths", {1}}},
+        json{{"include_uids", {"1000"}}},
+        json{{"newer_than_sec", "yesterday"}},
+        json{{"newer_than_sec", -1}},
+        json{{"newer_than_sec", 10}, {"older_than_sec", 10}},
+        json{{"min_size", 10}, {"max_size", 1}}
+    }) {
+        const auto response = api.handle("POST", "/api/backup", request(rules));
+        EXPECT_EQ(response.status, 400);
+        EXPECT_EQ(response_json(response)["error"]["code"], "INVALID_FILTER");
+    }
+}
+
+TEST(WebApiContract, ReportsActiveOutputConflict) {
+    TempDir temp;
+    const std::string source = temp.create_dir("source");
+    const std::string output = temp.path() + "/archive.dat";
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    WebApi api(runtime);
+    const auto request = json{
+        {"source_path", source},
+        {"output_path", output},
+        {"filter_rules", json::object()}
+    }.dump();
+
+    ASSERT_EQ(api.handle("POST", "/api/backup", request).status, 202);
+    const auto response = api.handle("POST", "/api/backup", request);
+
+    EXPECT_EQ(response.status, 409);
+    EXPECT_EQ(response_json(response)["error"]["code"], "OUTPUT_CONFLICT");
+}
+
+TEST(WebApiContract, AcceptsRestoreRequestForReadableArchive) {
+    TempDir temp;
+    const std::string archive = temp.create_file("archive.dat", "archive");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    WebApi api(runtime);
+
+    const auto response = api.handle(
+        "POST", "/api/restore", json{
+            {"archive_path", archive},
+            {"target_path", temp.path() + "/restore"},
+            {"conflict_policy", "OVERWRITE"}
+        }.dump());
+
+    EXPECT_EQ(response.status, 202);
+    EXPECT_EQ(response_json(response)["type"], "restore");
+}
+
+TEST(WebApiContract, RejectsMissingBackupAndArchivePaths) {
+    TempDir temp;
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    WebApi api(runtime);
+
+    const auto backup = api.handle(
+        "POST", "/api/backup", json{
+            {"source_path", temp.path()},
+            {"filter_rules", json::object()}
+        }.dump());
+    EXPECT_EQ(backup.status, 400);
+
+    const auto restore = api.handle(
+        "POST", "/api/restore", json{
+            {"target_path", temp.path()},
+            {"conflict_policy", "SKIP"}
+        }.dump());
+    EXPECT_EQ(restore.status, 400);
+
+    const auto invalid_archive = api.handle(
+        "POST", "/api/restore", json{
+            {"archive_path", temp.path() + "/missing.dat"},
+            {"target_path", temp.path() + "/restore"},
+            {"conflict_policy", "SKIP"}
+        }.dump());
+    EXPECT_EQ(invalid_archive.status, 422);
+}
+
+TEST(WebApiContract, SerializesAllTerminalTaskResults) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    WebApi api(runtime);
+    std::vector<std::string> task_ids;
+    for (int index = 0; index < 4; ++index) {
+        BackupRequest request;
+        request.source_path = "/source" + std::to_string(index);
+        request.output_path = "/archive" + std::to_string(index);
+        const auto submission = runtime.submit_backup(request);
+        ASSERT_TRUE(submission.accepted());
+        task_ids.push_back(submission.task_id);
+    }
+
+    Result success;
+    success.status = Status::SUCCESS;
+    task_manager.complete_task(task_ids[0], success);
+    Result partial;
+    partial.status = Status::PARTIAL_SUCCESS;
+    task_manager.complete_task(task_ids[1], partial);
+    ASSERT_TRUE(runtime.cancel_task(task_ids[2]));
+    Result failed;
+    failed.status = Status::FAILED;
+    task_manager.complete_task(task_ids[3], failed);
+
+    EXPECT_EQ(response_json(api.handle("GET", "/api/tasks"))["tasks"].size(), 4u);
+    for (const auto& task_id : task_ids) {
+        const auto response = api.handle("GET", "/api/tasks/" + task_id);
+        EXPECT_EQ(response.status, 200);
+        EXPECT_FALSE(response_json(response)["result"].is_null());
+    }
+}
+
+TEST(WebApiContract, RejectsInvalidEventCursorForExistingTask) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+    const auto submission = runtime.submit_backup(request);
+    ASSERT_TRUE(submission.accepted());
+    WebApi api(runtime);
+
+    const auto response = api.handle(
+        "GET", "/api/tasks/" + submission.task_id + "/events?after=bad");
+    EXPECT_EQ(response.status, 400);
+    EXPECT_EQ(response_json(response)["error"]["code"], "INVALID_REQUEST");
+}
+
+TEST(WebApiServerContract, RejectsInvalidBindAddressAndAllowsRepeatedStop) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 2);
+    ApiConfig config;
+    config.port = 0;
+    config.bind_address = "256.256.256.256";
+    WebApiServer server(runtime, config);
+
+    EXPECT_FALSE(server.start());
+    server.stop();
+    server.stop();
+}
+
 TEST(WebApiServerContract, OptionsExposeCorsHeaders) {
     TaskManager task_manager;
     TaskRuntime runtime(task_manager, 1, 4);
