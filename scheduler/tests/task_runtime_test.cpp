@@ -288,6 +288,32 @@ TEST(TaskRuntime, RunsMultipleTasks) {
     runtime.shutdown();
 }
 
+TEST(TaskRuntime, AllocatesDefaultArchiveNamesForOutputDirectory) {
+    TempDir temp;
+    const std::string source = temp.create_dir("source");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    runtime.start();
+
+    BackupRequest first;
+    first.source_path = source;
+    first.output_directory = temp.path();
+    BackupRequest second = first;
+
+    const auto first_submission = runtime.submit_backup(first);
+    const auto second_submission = runtime.submit_backup(second);
+    ASSERT_TRUE(first_submission.accepted());
+    ASSERT_TRUE(second_submission.accepted());
+    EXPECT_EQ(wait_for_terminal(task_manager, first_submission.task_id).status,
+              TaskStatus::SUCCESS);
+    EXPECT_EQ(wait_for_terminal(task_manager, second_submission.task_id).status,
+              TaskStatus::SUCCESS);
+    runtime.shutdown();
+
+    EXPECT_TRUE(std::filesystem::exists(temp.path() + "/backup.dat"));
+    EXPECT_TRUE(std::filesystem::exists(temp.path() + "/backup-1.dat"));
+}
+
 TEST(TaskRuntime, RunsTasksConcurrentlyAcrossWorkers) {
     auto state = std::make_shared<BlockingScannerState>();
     TaskManager task_manager;

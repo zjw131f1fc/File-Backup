@@ -35,7 +35,8 @@ ApiResponse error_response(int status,
 
 ApiResponse submission_error_response(const TaskSubmission& submission) {
     int status = 500;
-    if (submission.error_code == "OUTPUT_CONFLICT") {
+    if (submission.error_code == "OUTPUT_CONFLICT" ||
+        submission.error_code == "OUTPUT_EXISTS") {
         status = 409;
     } else if (submission.error_code == "QUEUE_FULL") {
         status = 429;
@@ -65,6 +66,13 @@ bool is_readable(const std::string& path) {
 
 bool is_writable_directory(const std::filesystem::path& path) {
     return std::filesystem::is_directory(path) && ::access(path.c_str(), W_OK) == 0;
+}
+
+bool valid_archive_name(const std::string& name) {
+    if (name.empty()) return true;
+    const std::filesystem::path path(name);
+    return !path.is_absolute() && path.filename().string() == name &&
+        name != "." && name != "..";
 }
 
 std::filesystem::path normalized_path(const std::filesystem::path& path) {
@@ -520,20 +528,28 @@ ApiResponse WebApi::handle(const std::string& method,
             !read_string(request, "output_path", backup.output_path)) {
             return error_response(400, "INVALID_REQUEST", "source_path and output_path are required");
         }
+        if (request.contains("archive_name")) {
+            if (!request["archive_name"].is_string()) {
+                return error_response(400, "INVALID_REQUEST", "archive_name must be a file name");
+            }
+            backup.archive_name = request["archive_name"].get<std::string>();
+            if (!valid_archive_name(backup.archive_name)) {
+                return error_response(400, "INVALID_REQUEST", "archive_name must not contain a directory path");
+            }
+        }
         if (!read_filter_rules(request.value("filter_rules", json::object()), backup.filter_rules)) {
             return error_response(400, "INVALID_FILTER", "filter rules are invalid");
         }
         if (!is_directory(backup.source_path) || !is_readable(backup.source_path)) {
             return error_response(422, "INVALID_PATH", "source_path must be a readable directory");
         }
-        const auto output = std::filesystem::path(backup.output_path);
-        if (std::filesystem::exists(output)) {
-            return error_response(409, "OUTPUT_EXISTS", "output archive already exists");
+        const auto output_directory = std::filesystem::path(backup.output_path);
+        if (!is_writable_directory(output_directory) ||
+            is_same_or_inside(output_directory, backup.source_path)) {
+            return error_response(422, "INVALID_PATH", "output_path must be a writable directory outside source_path");
         }
-        if (!is_writable_directory(output.parent_path()) ||
-            is_inside(output, backup.source_path)) {
-            return error_response(422, "INVALID_PATH", "output_path is not writable or is inside source_path");
-        }
+        backup.output_directory = backup.output_path;
+        backup.output_path.clear();
         const TaskSubmission submission = runtime_.submit_backup(backup);
         if (!submission.accepted()) {
             return submission_error_response(submission);

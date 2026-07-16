@@ -35,6 +35,20 @@ json wait_for_http_terminal(httplib::Client& client,
     return json::object();
 }
 
+Task wait_for_terminal(TaskManager& task_manager, const std::string& task_id) {
+    for (int attempt = 0; attempt < 200; ++attempt) {
+        const Task task = task_manager.get_task(task_id);
+        if (task.status == TaskStatus::SUCCESS ||
+            task.status == TaskStatus::PARTIAL_SUCCESS ||
+            task.status == TaskStatus::FAILED ||
+            task.status == TaskStatus::CANCELLED) {
+            return task;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return task_manager.get_task(task_id);
+}
+
 }  // namespace
 
 TEST(WebApiContract, HealthReturnsServiceStatus) {
@@ -78,7 +92,7 @@ TEST(WebApiContract, InvalidJsonReturnsBadRequest) {
 TEST(WebApiContract, BackupReturnsAcceptedTask) {
     TempDir temp;
     const std::string source = temp.create_dir("source");
-    const std::string output = temp.path() + "/backup.dat";
+    const std::string output_directory = temp.path();
     TaskManager task_manager;
     TaskRuntime runtime(task_manager, 1, 4);
     runtime.start();
@@ -87,7 +101,7 @@ TEST(WebApiContract, BackupReturnsAcceptedTask) {
     const ApiResponse response = api.handle(
         "POST", "/api/backup", json{
             {"source_path", source},
-            {"output_path", output},
+            {"output_path", output_directory},
             {"filter_rules", json::object()}
         }.dump());
     const json body = response_json(response);
@@ -99,10 +113,63 @@ TEST(WebApiContract, BackupReturnsAcceptedTask) {
     runtime.shutdown();
 }
 
+TEST(WebApiContract, UsesDefaultArchiveNameAndRenamesConcurrentTasks) {
+    TempDir temp;
+    const std::string source = temp.create_dir("source");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    runtime.start();
+    WebApi api(runtime);
+    const auto request = [&temp, &source] {
+        return json{
+            {"source_path", source},
+            {"output_path", temp.path()},
+            {"filter_rules", json::object()}
+        }.dump();
+    };
+
+    const auto first = api.handle("POST", "/api/backup", request());
+    const auto second = api.handle("POST", "/api/backup", request());
+
+    ASSERT_EQ(first.status, 202);
+    ASSERT_EQ(second.status, 202);
+    const auto first_id = response_json(first)["task_id"].get<std::string>();
+    const auto second_id = response_json(second)["task_id"].get<std::string>();
+    EXPECT_EQ(wait_for_terminal(task_manager, first_id).status, TaskStatus::SUCCESS);
+    EXPECT_EQ(wait_for_terminal(task_manager, second_id).status, TaskStatus::SUCCESS);
+    runtime.shutdown();
+    EXPECT_TRUE(std::filesystem::exists(temp.path() + "/backup.dat"));
+    EXPECT_TRUE(std::filesystem::exists(temp.path() + "/backup-1.dat"));
+}
+
+TEST(WebApiContract, UsesExplicitArchiveName) {
+    TempDir temp;
+    const std::string source = temp.create_dir("source");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 2);
+    runtime.start();
+    WebApi api(runtime);
+
+    const auto response = api.handle(
+        "POST", "/api/backup", json{
+            {"source_path", source},
+            {"output_path", temp.path()},
+            {"archive_name", "nightly.dat"},
+            {"filter_rules", json::object()}
+        }.dump());
+
+    ASSERT_EQ(response.status, 202);
+    const auto task_id = response_json(response)["task_id"].get<std::string>();
+    EXPECT_EQ(wait_for_terminal(task_manager, task_id).status, TaskStatus::SUCCESS);
+    runtime.shutdown();
+    EXPECT_TRUE(std::filesystem::exists(temp.path() + "/nightly.dat"));
+}
+
 TEST(WebApiContract, ExistingOutputReturnsConflict) {
     TempDir temp;
     const std::string source = temp.create_dir("source");
-    const std::string output = temp.create_file("backup.dat", "existing");
+    const std::string output_directory = temp.path();
+    temp.create_file("backup.dat", "existing");
     TaskManager task_manager;
     TaskRuntime runtime(task_manager);
     WebApi api(runtime);
@@ -110,7 +177,8 @@ TEST(WebApiContract, ExistingOutputReturnsConflict) {
     const ApiResponse response = api.handle(
         "POST", "/api/backup", json{
             {"source_path", source},
-            {"output_path", output},
+            {"output_path", output_directory},
+            {"archive_name", "backup.dat"},
             {"filter_rules", json::object()}
         }.dump());
 
@@ -121,7 +189,7 @@ TEST(WebApiContract, ExistingOutputReturnsConflict) {
 TEST(WebApiContract, StoppedRuntimeReturnsServiceUnavailable) {
     TempDir temp;
     const std::string source = temp.create_dir("source");
-    const std::string output = temp.path() + "/backup.dat";
+    const std::string output_directory = temp.path();
     TaskManager task_manager;
     TaskRuntime runtime(task_manager);
     runtime.shutdown();
@@ -130,7 +198,7 @@ TEST(WebApiContract, StoppedRuntimeReturnsServiceUnavailable) {
     const ApiResponse response = api.handle(
         "POST", "/api/backup", json{
             {"source_path", source},
-            {"output_path", output},
+            {"output_path", output_directory},
             {"filter_rules", json::object()}
         }.dump());
 
@@ -187,7 +255,7 @@ TEST(WebApiServerContract, StreamsTaskEventsOverHttp) {
         "/api/backup",
         json{
             {"source_path", temp.create_dir("source")},
-            {"output_path", temp.path() + "/archive.dat"},
+            {"output_path", temp.path()},
             {"filter_rules", json::object()}
         }.dump(),
         "application/json");
@@ -229,7 +297,7 @@ TEST(WebApiServerContract, CompletesBackupOverHttp) {
         "/api/backup",
         json{
             {"source_path", source},
-            {"output_path", archive},
+            {"output_path", temp.path()},
             {"filter_rules", json::object()}
         }.dump(),
         "application/json");
@@ -410,12 +478,30 @@ TEST(WebApiContract, RejectsMalformedFilterRules) {
     const auto response = api.handle(
         "POST", "/api/backup", json{
             {"source_path", temp.create_dir("source")},
-            {"output_path", temp.path() + "/archive.dat"},
+            {"output_path", temp.path()},
             {"filter_rules", {{"include_types", {"NOT_A_TYPE"}}}}
         }.dump());
 
     EXPECT_EQ(response.status, 400);
     EXPECT_EQ(response_json(response)["error"]["code"], "INVALID_FILTER");
+}
+
+TEST(WebApiContract, RejectsArchiveNameWithDirectoryPath) {
+    TempDir temp;
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    WebApi api(runtime);
+
+    const auto response = api.handle(
+        "POST", "/api/backup", json{
+            {"source_path", temp.create_dir("source")},
+            {"output_path", temp.path()},
+            {"archive_name", "nested/archive.dat"},
+            {"filter_rules", json::object()}
+        }.dump());
+
+    EXPECT_EQ(response.status, 400);
+    EXPECT_EQ(response_json(response)["error"]["code"], "INVALID_REQUEST");
 }
 
 TEST(WebApiContract, RejectsOutputInsideSource) {
@@ -428,7 +514,7 @@ TEST(WebApiContract, RejectsOutputInsideSource) {
     const auto response = api.handle(
         "POST", "/api/backup", json{
             {"source_path", source},
-            {"output_path", source + "/archive.dat"},
+            {"output_path", source},
             {"filter_rules", json::object()}
         }.dump());
 
@@ -584,7 +670,7 @@ TEST(WebApiContract, ReportsQueueFull) {
     WebApi api(runtime);
     const auto request = json{
         {"source_path", source},
-        {"output_path", temp.path() + "/archive.dat"},
+        {"output_path", temp.path()},
         {"filter_rules", json::object()}
     }.dump();
 
@@ -592,7 +678,8 @@ TEST(WebApiContract, ReportsQueueFull) {
     const auto response = api.handle(
         "POST", "/api/backup", json{
             {"source_path", source},
-            {"output_path", temp.path() + "/archive-2.dat"},
+            {"output_path", temp.path()},
+            {"archive_name", "archive-2.dat"},
             {"filter_rules", json::object()}
         }.dump());
     EXPECT_EQ(response.status, 429);
@@ -609,7 +696,7 @@ TEST(WebApiContract, AcceptsCompleteFilterRules) {
     const auto response = api.handle(
         "POST", "/api/backup", json{
             {"source_path", source},
-            {"output_path", temp.path() + "/archive.dat"},
+            {"output_path", temp.path()},
             {"filter_rules", {
                 {"include_paths", {"src/*"}},
                 {"exclude_paths", {"src/tmp/*"}},
@@ -636,8 +723,7 @@ TEST(WebApiContract, RejectsInvalidFilterShapesAndRanges) {
     const auto request = [&source, &temp](const json& rules) {
         return json{
             {"source_path", source},
-            {"output_path", temp.path() + "/archive-" +
-                std::to_string(rules.dump().size()) + ".dat"},
+            {"output_path", temp.path()},
             {"filter_rules", rules}
         }.dump();
     };
@@ -662,13 +748,14 @@ TEST(WebApiContract, RejectsInvalidFilterShapesAndRanges) {
 TEST(WebApiContract, ReportsActiveOutputConflict) {
     TempDir temp;
     const std::string source = temp.create_dir("source");
-    const std::string output = temp.path() + "/archive.dat";
+    const std::string output_directory = temp.path();
     TaskManager task_manager;
     TaskRuntime runtime(task_manager);
     WebApi api(runtime);
     const auto request = json{
         {"source_path", source},
-        {"output_path", output},
+        {"output_path", output_directory},
+        {"archive_name", "archive.dat"},
         {"filter_rules", json::object()}
     }.dump();
 
@@ -713,7 +800,7 @@ TEST(WebApiContract, RejectsMissingBackupAndArchivePaths) {
     const auto invalid_source = api.handle(
         "POST", "/api/backup", json{
             {"source_path", temp.path() + "/missing-source"},
-            {"output_path", temp.path() + "/archive.dat"},
+            {"output_path", temp.path()},
             {"filter_rules", json::object()}
         }.dump());
     EXPECT_EQ(invalid_source.status, 422);

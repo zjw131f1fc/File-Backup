@@ -6,6 +6,7 @@
 #include <ctime>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <iomanip>
 #include <mutex>
 #include <stdexcept>
@@ -18,6 +19,13 @@
 namespace backup {
 
 namespace {
+
+bool valid_archive_name(const std::string& name) {
+    if (name.empty()) return true;
+    const std::filesystem::path path(name);
+    return !path.is_absolute() && path.filename().string() == name &&
+        name != "." && name != "..";
+}
 
 TaskSubmission failed_submission(const std::string& code, const std::string& message) {
     TaskSubmission submission;
@@ -157,6 +165,13 @@ struct TaskRuntime::Impl {
             return failed_submission("QUEUE_FULL", "task queue is full");
         }
 
+        if (job.kind == TaskKind::BACKUP) {
+            TaskSubmission preparation_failure;
+            if (!prepare_backup_output(job.backup_request, preparation_failure)) {
+                return preparation_failure;
+            }
+        }
+
         if (job.kind == TaskKind::BACKUP && !job.backup_request.output_path.empty()) {
             for (const auto& item : metadata) {
                 if (item.second.type != "backup" ||
@@ -191,6 +206,84 @@ struct TaskRuntime::Impl {
         submission.result.status = Status::SUCCESS;
         submission.result.message = "task accepted";
         return submission;
+    }
+
+    bool prepare_backup_output(BackupRequest& request,
+                               TaskSubmission& failure) {
+        if (request.output_directory.empty()) return true;
+
+        if (!valid_archive_name(request.archive_name)) {
+            failure = failed_submission(
+                "INVALID_ARCHIVE_NAME",
+                "archive_name must be a file name without a directory path");
+            return false;
+        }
+
+        const std::filesystem::path directory(request.output_directory);
+        std::error_code error;
+        if (!std::filesystem::is_directory(directory, error) || error) {
+            failure = failed_submission(
+                "INVALID_PATH", "output_path must be an existing directory");
+            return false;
+        }
+
+        const bool explicit_name = !request.archive_name.empty();
+        const std::string requested_name = explicit_name
+            ? request.archive_name : "backup.dat";
+        const std::filesystem::path requested = directory / requested_name;
+
+        const auto is_reserved = [this](const std::filesystem::path& candidate) {
+            for (const auto& item : metadata) {
+                if (item.second.type != "backup" ||
+                    item.second.output_path != candidate.string()) {
+                    continue;
+                }
+                const Task task = task_manager.get_task(item.first);
+                if (task.status == TaskStatus::PENDING ||
+                    task.status == TaskStatus::RUNNING) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        const auto is_occupied = [&is_reserved](const std::filesystem::path& candidate) {
+            std::error_code exists_error;
+            return std::filesystem::exists(candidate, exists_error) ||
+                is_reserved(candidate);
+        };
+
+        std::filesystem::path selected = requested;
+        if (explicit_name) {
+            std::error_code exists_error;
+            if (std::filesystem::exists(selected, exists_error)) {
+                failure = failed_submission(
+                    "OUTPUT_EXISTS", "output archive already exists");
+                return false;
+            }
+            if (is_reserved(selected)) {
+                failure = failed_submission(
+                    "OUTPUT_CONFLICT", "output archive is already in use");
+                return false;
+            }
+        } else {
+            const auto stem = requested.stem().string();
+            const auto extension = requested.extension().string();
+            for (std::size_t suffix = 0; suffix < 100000; ++suffix) {
+                selected = suffix == 0
+                    ? requested
+                    : directory / (stem + "-" + std::to_string(suffix) + extension);
+                if (!is_occupied(selected)) break;
+            }
+            if (is_occupied(selected)) {
+                failure = failed_submission(
+                    "OUTPUT_CONFLICT", "could not allocate a unique output archive");
+                return false;
+            }
+        }
+
+        request.output_path = selected.string();
+        return true;
     }
 
     void record_event_locked(const std::string& task_id,
