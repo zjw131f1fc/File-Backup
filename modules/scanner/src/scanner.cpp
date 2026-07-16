@@ -17,6 +17,8 @@ Result failed_result(const std::string& message) {
     return result;
 }
 
+// Convert the mode returned by lstat without following symbolic links.
+// Sockets and unknown platform-specific types intentionally have no mapping.
 std::optional<EntryType> entry_type(mode_t mode) {
     if (S_ISREG(mode)) return EntryType::REGULAR_FILE;
     if (S_ISDIR(mode)) return EntryType::DIRECTORY;
@@ -27,6 +29,8 @@ std::optional<EntryType> entry_type(mode_t mode) {
     return std::nullopt;
 }
 
+// Build the archive-facing metadata record from one lstat snapshot. Keeping
+// this conversion in one place ensures filtering and writing see the same data.
 bool fill_entry(const std::filesystem::path& path,
                 const std::filesystem::path& source_root,
                 EntryInfo& entry,
@@ -49,6 +53,8 @@ bool fill_entry(const std::filesystem::path& path,
     entry.mtime_nsec = metadata.st_mtim.tv_nsec;
 
     if (entry.type == EntryType::SYMBOLIC_LINK) {
+        // Store the link text itself; resolving it would both change semantics
+        // and risk walking outside the selected source tree.
         std::error_code error;
         entry.link_target = std::filesystem::read_symlink(path, error).generic_string();
         return !error;
@@ -71,6 +77,8 @@ public:
                            ProgressCallback progress_callback) override {
         std::error_code error;
         const auto source = std::filesystem::path(source_path);
+        // symlink_status prevents a symlink to a directory from being accepted
+        // as the backup root implicitly.
         const auto source_status = std::filesystem::symlink_status(source, error);
         if (error || source_status.type() == std::filesystem::file_type::not_found) {
             return failed_result("source path does not exist: " + source_path);
@@ -96,10 +104,14 @@ public:
 
             struct stat metadata {};
             EntryInfo entry;
+            // lstat is required here: stat would turn symbolic links into their
+            // targets and could cause incorrect type and metadata records.
             if (::lstat(it->path().c_str(), &metadata) != 0) {
                 return failed_result("failed to read entry: " + it->path().string());
             }
             if (S_ISSOCK(metadata.st_mode)) {
+                // Unix sockets are live IPC endpoints and are explicitly not
+                // representable in the archive contract.
                 continue;
             }
             if (!fill_entry(it->path(), source, entry, metadata)) {
@@ -125,6 +137,8 @@ public:
 
             Result write_result;
             if (entry.type == EntryType::REGULAR_FILE) {
+                // ArchiveWriter consumes this stream before the local object is
+                // destroyed, so large files never need to be buffered here.
                 std::ifstream content(it->path(), std::ios::binary);
                 if (!content) {
                     return failed_result("failed to open entry: " + it->path().string());
@@ -149,6 +163,8 @@ public:
             progress.processed_bytes = processed_bytes;
             progress.current_path = entry.path;
             if (progress_callback && !progress_callback(progress)) {
+                // Scanner does not abort the archive itself. Ownership of the
+                // commit/abort decision remains with BackupScheduler.
                 Result result;
                 result.status = Status::CANCELLED;
                 result.message = "scan cancelled by progress callback";

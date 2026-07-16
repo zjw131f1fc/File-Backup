@@ -37,6 +37,8 @@ bool safe_relative_path(const std::string& path) {
     return true;
 }
 
+// Validate every existing parent without following a symlink. This protects
+// paths such as safe/link/file where link redirects outside the restore root.
 bool safe_parent_chain(const std::filesystem::path& root,
                        const std::filesystem::path& relative) {
     auto current = root;
@@ -65,6 +67,8 @@ bool exists_without_following(const std::filesystem::path& path) {
     return !error && status.type() != std::filesystem::file_type::not_found;
 }
 
+// Conflict replacement is deliberately centralized so special-file branches
+// cannot accidentally use different deletion behavior.
 bool remove_existing(const std::filesystem::path& path) {
     std::error_code error;
     std::filesystem::remove_all(path, error);
@@ -72,6 +76,8 @@ bool remove_existing(const std::filesystem::path& path) {
 }
 
 std::filesystem::path renamed_target(const std::filesystem::path& target) {
+    // Keep the archive filename intact and append a deterministic numeric
+    // suffix. The upper bound prevents an unbounded search in a crowded folder.
     for (int suffix = 1; suffix < 10000; ++suffix) {
         auto candidate = target;
         candidate += "." + std::to_string(suffix);
@@ -117,6 +123,8 @@ public:
                 return success_result("skipped existing " + target.string());
             }
             if (conflict_policy == ConflictPolicy::RENAME) {
+                // The mapping is recorded only after creation succeeds, so a
+                // failed restore cannot redirect later archive entries.
                 target = renamed_target(target);
                 if (target.empty()) {
                     return failed_result("failed to choose renamed target: " + entry_info.path);
@@ -136,6 +144,8 @@ public:
         }
 
         std::error_code error;
+        // Archives may omit directory entries through filtering. Creating the
+        // parent chain still allows an included descendant to be restored.
         std::filesystem::create_directories(target.parent_path(), error);
         if (error) {
             return failed_result("failed to create target parent: " + error.message());
@@ -153,12 +163,16 @@ public:
                 result = success_result("restored directory " + target.string());
                 break;
             case EntryType::SYMBOLIC_LINK:
+                // Preserve the archived link text. Never resolve or validate it
+                // as a filesystem path because dangling links are legitimate.
                 if (::symlink(entry_info.link_target.c_str(), target.c_str()) != 0) {
                     return failed_result("failed to create symbolic link: " + target.string());
                 }
                 result = success_result("restored symbolic link " + target.string());
                 break;
             case EntryType::HARD_LINK: {
+                // Resolve through an earlier RENAME mapping so both names still
+                // reference the same inode under the selected conflict policy.
                 if (!safe_relative_path(entry_info.hard_link_target)) {
                     return failed_result("unsafe hard link target: " + entry_info.hard_link_target);
                 }
@@ -183,6 +197,8 @@ public:
                 break;
             case EntryType::CHARACTER_DEVICE:
             case EntryType::BLOCK_DEVICE: {
+                // mknod commonly requires elevated privileges. Its failure is
+                // returned to the scheduler as an entry-level restore error.
                 const mode_t type = entry_info.type == EntryType::CHARACTER_DEVICE
                     ? S_IFCHR : S_IFBLK;
                 const auto device = makedev(entry_info.device_major, entry_info.device_minor);
@@ -212,6 +228,8 @@ public:
             return success_result("metadata skipped for existing " + target_path);
         }
         auto target = requested;
+        // Scheduler intentionally knows only archive paths. Translate that path
+        // here when restore_entry selected a renamed destination.
         const auto resolved = resolved_targets_.find(path_key(requested));
         if (resolved != resolved_targets_.end()) {
             target = resolved->second;
@@ -235,6 +253,8 @@ private:
     }
 
     static bool prepare_root(const std::filesystem::path& root) {
+        // Creating a missing root is convenient, but an existing symlink root is
+        // rejected because all subsequent lexical containment checks trust it.
         std::error_code error;
         auto status = std::filesystem::symlink_status(root, error);
         if (!error && status.type() == std::filesystem::file_type::symlink) {
@@ -272,6 +292,8 @@ private:
         int warnings = 0;
         std::string messages;
         const bool is_link = entry_info.type == EntryType::SYMBOLIC_LINK;
+        // lchown and AT_SYMLINK_NOFOLLOW modify the link object rather than the
+        // potentially external object referenced by it.
         const int owner_result = is_link
             ? ::lchown(target.c_str(), entry_info.uid, entry_info.gid)
             : ::chown(target.c_str(), entry_info.uid, entry_info.gid);
@@ -295,6 +317,8 @@ private:
             }
         }
         Result result = success_result("restored metadata for " + target.string());
+        // Metadata restoration is best effort by contract. Preserve SUCCESS so
+        // valid content is not reported as lost, and expose warning_count.
         result.warning_count = warnings;
         if (warnings != 0) {
             result.message = messages + target.string();
@@ -332,6 +356,8 @@ private:
         }
 
         std::string temporary_template = target.string() + ".restore.XXXXXX";
+        // mkstemp provides a unique file in the destination directory, avoiding
+        // collisions between concurrent restore tasks.
         std::vector<char> temporary_name(temporary_template.begin(), temporary_template.end());
         temporary_name.push_back('\0');
         const int temporary_fd = ::mkstemp(temporary_name.data());
@@ -344,6 +370,8 @@ private:
         uint64_t written_bytes = 0;
         bool failed = false;
         while (*content) {
+            // Handle short reads, short writes, and EINTR explicitly. A stream
+            // insertion operator would not let us validate the byte count.
             content->read(buffer.data(), buffer.size());
             const std::streamsize count = content->gcount();
             std::streamsize offset = 0;
@@ -361,6 +389,8 @@ private:
             if (failed) break;
         }
         if (content->bad() || written_bytes != entry_info.size) failed = true;
+        // A size mismatch usually means a truncated/corrupt archive. Never
+        // install that partial file over a valid destination.
         if (::close(temporary_fd) != 0) failed = true;
         if (failed) {
             std::filesystem::remove(temporary);
