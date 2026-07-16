@@ -218,9 +218,6 @@ public:
             truncated = true;
         }
 
-        entries_ = std::move(entries);
-        validated_ = true;
-
         if (truncated) {
             return failed("archive is truncated");
         }
@@ -229,6 +226,8 @@ public:
             return failed("archive contains dangerous paths");
         }
 
+        entries_ = std::move(entries);
+        validated_ = true;
         return success("archive validated");
     }
 

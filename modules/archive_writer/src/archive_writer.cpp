@@ -86,8 +86,15 @@ public:
         while (content) {
             content.read(buf.data(), buf.size());
             std::streamsize n = content.gcount();
+            if (content.bad()) {
+                // 流发生不可恢复错误
+                return failed("input stream read error for " + entry_info.path);
+            }
             if (n > 0) {
                 ofs_.write(buf.data(), n);
+                if (!ofs_) {
+                    return failed("failed to write content for " + entry_info.path);
+                }
                 actual_size += n;
             }
         }
@@ -96,6 +103,13 @@ public:
         ofs_.seekp(content_len_pos);
         write_le(ofs_, actual_size);
         ofs_.seekp(0, std::ios::end);
+
+        // 检查实际大小与声明是否一致（若 entry_info.size > 0）
+        if (entry_info.size > 0 && actual_size != entry_info.size) {
+            return failed("content size mismatch for " + entry_info.path
+                          + ": expected " + std::to_string(entry_info.size)
+                          + ", got " + std::to_string(actual_size));
+        }
 
         return success("added entry " + entry_info.path);
     }
@@ -137,11 +151,9 @@ public:
         close_stream();
         state_ = State::ABORTED;
 
+        // 只清理临时文件，绝不碰 output_path（可能已存在的用户文件）
         if (std::filesystem::exists(temp_path_)) {
             std::filesystem::remove(temp_path_);
-        }
-        if (std::filesystem::exists(output_path_)) {
-            std::filesystem::remove(output_path_);
         }
 
         return success("aborted");
