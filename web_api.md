@@ -25,7 +25,7 @@ Web 层需要一个 `TaskRuntime`（可以是 Web 服务内部组件，也可以
 
 - 每个任务创建独立的 Filter、Writer、Reader、Restorer 实例，不跨任务共享非线程安全实例；
 - `TaskManager` 的状态、进度、取消和任务索引操作必须线程安全；
-- 两个备份任务不能使用同一个 `output_path`，冲突时后提交任务返回 `409 OUTPUT_CONFLICT`；
+- 显式指定同一个 `archive_name` 的备份任务不能使用同一个输出目录，冲突时后提交任务返回 `409 OUTPUT_CONFLICT`；未指定名称时由运行时自动分配不重复的归档文件名；
 - 归档写入期间不能有其他任务读取或写入同一个归档文件；
 - 同一个源目录可以被多个只读扫描任务同时使用；
 - worker 数量和队列长度应由服务配置限制，避免并发 I/O 使本机失去响应。
@@ -142,7 +142,8 @@ POST /api/backup
 ```json
 {
   "source_path": "/home/user/data",
-  "output_path": "/backup/data.bak",
+  "output_path": "/backup",
+  "archive_name": "data.bak",
   "filter_rules": {
     "include_paths": [],
     "exclude_paths": [],
@@ -158,14 +159,14 @@ POST /api/backup
 }
 ```
 
-字段对应 `BackupRequest` 和 `FilterRules`。Web 层负责校验路径非空、筛选数组格式正确、尺寸范围合法，并将请求转换为公共类型后提交给 `TaskManager`。
+`output_path` 是归档输出目录，不是归档文件路径。`archive_name` 是可选的单个文件名；省略时默认使用 `backup.dat`，如果同名文件或任务已占用，则自动尝试 `backup-1.dat`、`backup-2.dat` 等名称。字段对应 `BackupRequest` 和 `FilterRules`。Web 层负责校验路径非空、筛选数组格式正确、尺寸范围合法，并将请求转换为公共类型后提交给 `TaskRuntime`。
 
 备份请求还必须满足：
 
 - `source_path` 必须是可读目录；
-- `output_path` 的父目录必须存在且可写；
-- `output_path` 不能位于 `source_path` 内部，避免扫描时把归档自身再次纳入备份；
-- 第一版如果目标归档已存在，返回 `409 OUTPUT_EXISTS`，不隐式覆盖；
+- `output_path` 必须是已存在且可写的目录；
+- `output_path` 不能等于或位于 `source_path` 内部，避免扫描时把归档自身再次纳入备份；
+- 显式指定的 `archive_name` 已存在时返回 `409 OUTPUT_EXISTS`，不覆盖；未指定名称时自动选择下一个可用名称；
 - `newer_than_sec` 和 `older_than_sec` 是 Unix 时间戳秒，`0` 表示不限制；两者同时设置时必须满足 `newer_than_sec < older_than_sec`；
 - `min_size` 和 `max_size` 单位为字节，`0` 表示对应方向不限制；两者都非零时必须满足 `min_size <= max_size`；
 - `include_types` 只能使用 `capabilities` 返回的枚举字符串；

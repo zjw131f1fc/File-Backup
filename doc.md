@@ -261,7 +261,9 @@ restorer.restore_metadata(
 ```text
 BackupRequest
 - source_path
-- output_path
+- output_path (resolved archive path)
+- output_directory (optional destination directory)
+- archive_name (optional file name)
 - filter_rules
 ```
 

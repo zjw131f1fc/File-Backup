@@ -310,8 +310,10 @@
       if (state.mode === "backup") {
         const source = $("#source-path").value.trim();
         const output = $("#output-path").value.trim();
-        if (!source || !output) throw new Error("请填写源目录和输出归档。");
+        const archiveName = $("#archive-name").value.trim();
+        if (!source || !output) throw new Error("请填写源目录和输出目录。");
         payload = { source_path: source, output_path: output, filter_rules: buildFilterRules() };
+        if (archiveName) payload.archive_name = archiveName;
       } else {
         const archive = $("#archive-path").value.trim();
         const target = $("#target-path").value.trim();

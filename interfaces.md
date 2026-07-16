@@ -270,7 +270,7 @@ ConflictPolicy 取值：
 
 | 参数 | 类型 | 说明 |
 |---|---|---|
-| request | const BackupRequest& | 包含 source_path、output_path、filter_rules |
+| request | const BackupRequest& | 包含 source_path、归档输出路径或输出目录、archive_name、filter_rules |
 
 返回任务 ID 字符串，任务初始状态为 PENDING。
 

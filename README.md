@@ -72,10 +72,11 @@ ctest -R common
 ### 备份流程
 
 ```
-1. filter   = create_filter(request.filter_rules)
-2. writer   = create_archive(request.output_path)
-3. scanner.scan_and_backup(source_path, *filter, *writer, progress_cb)
-4. result.ok() ? writer.commit() : writer.abort()
+1. runtime  = allocate the final archive path under the requested output directory
+2. filter   = create_filter(request.filter_rules)
+3. writer   = create_archive(request.output_path)
+4. scanner.scan_and_backup(source_path, *filter, *writer, progress_cb)
+5. result.ok() ? writer.commit() : writer.abort()
 ```
 
 Scanner 内部：扫描 → 筛选 → 开源文件流 → 写入归档。调度器只调一次接口。

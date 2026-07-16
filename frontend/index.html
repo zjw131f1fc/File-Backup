@@ -200,12 +200,17 @@
                 <small>将递归扫描此目录下的内容。</small>
               </label>
               <label class="field field-wide">
-                <span>输出归档 <em>*</em></span>
+                <span>输出目录 <em>*</em></span>
                 <div class="input-with-action">
-                  <input id="output-path" name="output_path" type="text" placeholder="例如 /backup/data.bak" autocomplete="off">
-                  <button class="input-action" data-browse-target="output-path" type="button" aria-label="选择归档路径" title="选择归档路径">⌕</button>
+                  <input id="output-path" name="output_path" type="text" placeholder="例如 /backup" autocomplete="off">
+                  <button class="input-action" data-browse-target="output-path" type="button" aria-label="选择输出目录" title="选择输出目录">⌕</button>
                 </div>
-                <small>归档已存在时，第一版 API 会拒绝覆盖。</small>
+                <small>归档文件会写入此目录，目录内不能位于源目录中。</small>
+              </label>
+              <label class="field">
+                <span>归档名称（可选）</span>
+                <input id="archive-name" name="archive_name" type="text" placeholder="默认 backup.dat" autocomplete="off">
+                <small>留空时自动命名，重名会追加序号。</small>
               </label>
             </div>
 
