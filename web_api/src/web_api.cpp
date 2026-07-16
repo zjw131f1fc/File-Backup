@@ -24,10 +24,12 @@ ApiResponse WebApi::handle(const std::string& method,
     const std::string query = query_position == std::string::npos
         ? std::string() : target.substr(query_position + 1);
 
+    // GET /api/health：检查 Web API 是否在线。
     if (method == "GET" && path == "/api/health") {
         return json_response(200, {{"status", "ok"}, {"service", "backup-web"}});
     }
 
+    // GET /api/capabilities：返回文件类型、筛选条件和并发配置。
     if (method == "GET" && path == "/api/capabilities") {
         json entry_types = json::array();
         for (const auto type : {EntryType::REGULAR_FILE, EntryType::DIRECTORY,
@@ -51,6 +53,7 @@ ApiResponse WebApi::handle(const std::string& method,
         });
     }
 
+    // GET /api/tasks：按状态或类型查询任务列表。
     if (method == "GET" && path == "/api/tasks") {
         const std::string status_filter = query_value(query, "status");
         const std::string type_filter = query_value(query, "type");
@@ -79,6 +82,7 @@ ApiResponse WebApi::handle(const std::string& method,
         return json_response(200, {{"tasks", tasks}});
     }
 
+    // GET /api/filesystem/roots：返回前端可以浏览的根目录。
     if (method == "GET" && path == "/api/filesystem/roots") {
         json roots = json::array();
         for (const auto& root : config_.allowed_roots) {
@@ -91,6 +95,7 @@ ApiResponse WebApi::handle(const std::string& method,
         return json_response(200, {{"roots", roots}});
     }
 
+    // GET /api/filesystem/entries：列出指定目录下的文件和子目录。
     if (method == "GET" && path == "/api/filesystem/entries") {
         const std::string requested_path = query_value(query, "path");
         if (requested_path.empty()) {
@@ -122,6 +127,7 @@ ApiResponse WebApi::handle(const std::string& method,
         });
     }
 
+    // POST /api/filesystem/directories：在路径选择器中创建文件夹。
     if (method == "POST" && path == "/api/filesystem/directories") {
         json request;
         try {
@@ -171,6 +177,7 @@ ApiResponse WebApi::handle(const std::string& method,
         });
     }
 
+    // GET /api/tasks/{task_id}：查询单个任务；/events 子路径返回进度事件。
     if (method == "GET" && path.rfind("/api/tasks/", 0) == 0) {
         const std::string prefix = "/api/tasks/";
         const std::string suffix = path.substr(prefix.size());
@@ -205,6 +212,7 @@ ApiResponse WebApi::handle(const std::string& method,
         return error_response(404, "TASK_NOT_FOUND", "task not found");
     }
 
+    // POST /api/tasks/{task_id}/cancel：取消等待中或执行中的任务。
     if (method == "POST" && path.rfind("/api/tasks/", 0) == 0 &&
         path.size() > 7 && path.compare(path.size() - 7, 7, "/cancel") == 0) {
         const std::string prefix = "/api/tasks/";
@@ -219,6 +227,7 @@ ApiResponse WebApi::handle(const std::string& method,
         return json_response(200, {{"task_id", task_id}, {"status", "CANCELLED"}});
     }
 
+    // POST /api/backup 和 POST /api/restore：提交备份或恢复任务。
     if (method != "POST" || (path != "/api/backup" && path != "/api/restore")) {
         return error_response(404, "NOT_FOUND", "API endpoint not found");
     }
@@ -238,6 +247,7 @@ ApiResponse WebApi::handle_task_submission(const std::string& path,
         return error_response(400, "INVALID_REQUEST", "request body must be an object");
     }
 
+    // POST /api/backup：校验源目录、输出目录和筛选条件后入队。
     if (path == "/api/backup") {
         BackupRequest backup;
         if (!read_string(request, "source_path", backup.source_path) ||
@@ -275,6 +285,7 @@ ApiResponse WebApi::handle_task_submission(const std::string& path,
         });
     }
 
+    // POST /api/restore：校验归档、目标目录和冲突策略后入队。
     RestoreRequest restore;
     std::string policy;
     if (!read_string(request, "archive_path", restore.archive_path) ||
@@ -313,6 +324,7 @@ void WebApi::mount(httplib::Server& server) {
         }
     };
 
+    // SSE GET /api/tasks/{task_id}/events：持续推送任务进度和结果。
     server.Get(R"(/api/tasks/([^/]+)/events)", [this](const httplib::Request& request,
                                                         httplib::Response& response) {
         const std::string task_id = url_decode(request.matches[1].str());
@@ -354,8 +366,10 @@ void WebApi::mount(httplib::Server& server) {
                 return true;
             });
     });
+    // 其他 GET/POST 请求统一交给 WebApi::handle() 分发。
     server.Get(R"(/api/.*)", callback);
     server.Post(R"(/api/.*)", callback);
+    // OPTIONS：处理前后端分端口运行时的 CORS 预检请求。
     server.Options(R"(/api/.*)", [this](const httplib::Request&, httplib::Response& response) {
         response.status = 204;
         response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
