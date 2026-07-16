@@ -4,3 +4,10 @@ target_include_directories(archive_writer_test PRIVATE ${CMAKE_SOURCE_DIR}/tests
 
 add_test(NAME archive_writer COMMAND archive_writer_test)
 set_tests_properties(archive_writer PROPERTIES LABELS "archive_writer")
+
+add_executable(archive_functional_test archive_functional_test.cpp)
+target_link_libraries(archive_functional_test PRIVATE backup_archive_writer backup_archive_reader GTest::gtest_main)
+target_include_directories(archive_functional_test PRIVATE ${CMAKE_SOURCE_DIR}/tests/helpers)
+
+add_test(NAME archive_functional COMMAND archive_functional_test)
+set_tests_properties(archive_functional PROPERTIES LABELS "archive_writer")

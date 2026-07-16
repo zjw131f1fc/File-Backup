@@ -2,6 +2,7 @@
 #include "modules/archive_writer/archive_writer.h"
 #include "modules/archive_reader/archive_reader.h"
 #include "../../tests/helpers/temp_dir.h"
+#include <filesystem>
 #include <sstream>
 
 using namespace backup;
@@ -216,4 +217,18 @@ TEST(ArchiveWriterContract, AddEntryAfterAbortFails) {
     entry.type = EntryType::REGULAR_FILE;
     Result r = writer->add_entry(entry);
     EXPECT_EQ(r.status, Status::FAILED);
+}
+
+TEST(ArchiveWriterContract, AbortAfterCommitFailsAndPreservesOutput) {
+    TempDir tmp;
+    const std::string path = tmp.create_file("archive.dat", "existing");
+
+    auto writer = create_archive(path);
+    EXPECT_EQ(writer->abort().status, Status::SUCCESS);
+    EXPECT_TRUE(std::filesystem::exists(path));
+
+    auto committed = create_archive(path);
+    EXPECT_EQ(committed->commit().status, Status::SUCCESS);
+    EXPECT_EQ(committed->abort().status, Status::FAILED);
+    EXPECT_TRUE(std::filesystem::exists(path));
 }
