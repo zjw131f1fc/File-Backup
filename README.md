@@ -41,14 +41,38 @@ project/
 ### 构建
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
+./scripts/build.sh
+```
+
+跳过测试只构建：
+
+```bash
+./scripts/build.sh --skip-tests
 ```
 
 ### 运行全部测试
 
 ```bash
-cd build && ctest --output-on-failure
+ctest --test-dir build --output-on-failure
+```
+
+### 一键启动
+
+```bash
+./scripts/start.sh
+```
+
+脚本会先构建并测试，然后启动 Web API 和静态前端。打开终端输出的前端地址即可访问。
+如果需要允许其他数据目录：
+
+```bash
+./scripts/start.sh --root /home/user/data --root /backup
+```
+
+开发时也可以跳过构建：
+
+```bash
+./scripts/start.sh --skip-build
 ```
 
 ### 按模块运行测试
