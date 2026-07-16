@@ -119,6 +119,25 @@ TEST(WebApiContract, StoppedRuntimeReturnsServiceUnavailable) {
     EXPECT_EQ(response_json(response)["error"]["code"], "RUNTIME_STOPPED");
 }
 
+TEST(WebApiContract, StoppedRuntimeRejectsRestore) {
+    TempDir temp;
+    const std::string archive = temp.create_file("archive.dat", "archive");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    runtime.shutdown();
+    WebApi api(runtime);
+
+    const auto response = api.handle(
+        "POST", "/api/restore", json{
+            {"archive_path", archive},
+            {"target_path", temp.path() + "/restore"},
+            {"conflict_policy", "SKIP"}
+        }.dump());
+
+    EXPECT_EQ(response.status, 503);
+    EXPECT_EQ(response_json(response)["error"]["code"], "RUNTIME_STOPPED");
+}
+
 TEST(WebApiServerContract, ServesHealthOverHttp) {
     TaskManager task_manager;
     TaskRuntime runtime(task_manager, 1, 4);
@@ -167,6 +186,9 @@ TEST(WebApiServerContract, StreamsTaskEventsOverHttp) {
         "/api/tasks/" + task_id + "/events", invalid_cursor);
     ASSERT_TRUE(events_with_invalid_cursor);
     EXPECT_EQ(events_with_invalid_cursor->status, 200);
+    const auto missing_events = events_client.Get("/api/tasks/missing/events");
+    ASSERT_TRUE(missing_events);
+    EXPECT_EQ(missing_events->status, 404);
     server.stop();
 }
 
