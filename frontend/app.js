@@ -16,6 +16,7 @@ import {
 (() => {
   "use strict";
 
+  // 页面唯一状态：当前视图、任务列表、后端连接状态和弹窗选择状态都从这里读取。
   const state = {
     view: "dashboard",
     mode: "backup",
@@ -28,28 +29,34 @@ import {
     pickerPath: "/"
   };
 
+  // 简化单个元素和多个元素的 DOM 查询。
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
+  // 取任务最后一次有意义的时间，用于排序任务和活动。
   function taskTimestamp(task) {
     return Date.parse(task.finished_at || task.started_at || task.created_at || "") || 0;
   }
 
+  // 返回按时间倒序排列的备份任务，可选只保留成功备份。
   function sortedBackups(successOnly = false) {
     return state.tasks
       .filter(task => task.type === "backup" && (!successOnly || task.status === "SUCCESS"))
       .sort((left, right) => taskTimestamp(right) - taskTimestamp(left));
   }
 
+  // 取得任务当前处理路径，缺省时显示等待提示。
   function taskPath(task) {
     return task.progress?.current_path || (task.type === "backup" ? "等待保护目录" : "等待恢复点");
   }
 
+  // 取得路径所在目录，用于显示归档保存位置。
   function directoryOf(path) {
     const separator = path.lastIndexOf("/");
     return separator > 0 ? path.slice(0, separator) : "/";
   }
 
+  // 根据任务类型和状态决定列表中展示源路径还是保存目录。
   function displayTaskPath(task) {
     const path = taskPath(task);
     return task.type === "backup" && task.status === "SUCCESS"
@@ -57,9 +64,12 @@ import {
       : path;
   }
 
+  // 判断任务是否仍在等待或执行，可以被取消。
   function isActive(task) { return ACTIVE_STATUSES.has(task.status); }
+  // 判断任务是否失败或部分成功，需要用户关注。
   function isFailure(task) { return FAILURE_STATUSES.has(task.status); }
 
+  // 根据任务状态和已处理条目估算页面进度；后端没有总量时避免进度卡死。
   function taskProgress(task) {
     if (TERMINAL_STATUSES.has(task.status)) return 100;
     if (task.status === "PENDING") return 0;
@@ -67,11 +77,13 @@ import {
     return Math.min(94, Math.max(8, Math.round(entries / 25)));
   }
 
+  // 把一条任务变化放入最近活动列表，并限制列表长度。
   function addActivity(task, message) {
     state.activities.unshift({ task_id: task.task_id, status: task.status, message, time: new Date().toISOString() });
     state.activities = state.activities.slice(0, 8);
   }
 
+  // 更新页面顶部和侧边栏的 API 在线/演示模式标识。
   function setServiceState(online) {
     state.apiOnline = online;
     const label = online ? "在线" : "演示模式";
@@ -88,6 +100,7 @@ import {
     banner.classList.toggle("is-hidden", online || state.bannerDismissed);
   }
 
+  // 重新渲染当前页面的所有区域。
   function render() {
     $$('[data-view-panel]').forEach(panel => panel.classList.toggle("is-active", panel.dataset.viewPanel === state.view));
     $$('[data-view="dashboard"], [data-view="create"]').forEach(button => {
@@ -104,6 +117,7 @@ import {
     renderTaskDetail();
   }
 
+  // 渲染任务数量指标：执行中、成功备份和需要关注的任务。
   function renderMetrics() {
     const active = state.tasks.filter(isActive).length;
     const completed = state.tasks.filter(task => task.type === "backup" && task.status === "SUCCESS").length;
@@ -113,6 +127,7 @@ import {
     $("#metric-attention").textContent = attention;
   }
 
+  // 渲染“保护状态”区域，展示最近成功备份或当前首次备份状态。
   function renderProtection() {
     const latest = sortedBackups(true)[0];
     const activeBackup = state.tasks.some(task => task.type === "backup" && isActive(task));
@@ -139,6 +154,7 @@ import {
     }
   }
 
+  // 渲染任务表格和每个任务的进度、状态、操作入口。
   function renderTasks() {
     const body = $("#task-table-body");
     const empty = $("#task-empty");
@@ -162,6 +178,7 @@ import {
     }).join("");
   }
 
+  // 渲染最近成功备份，作为可直接发起还原的恢复点。
   function renderRestorePoints() {
     const container = $("#restore-points");
     const points = sortedBackups(true).slice(0, 5);
@@ -176,6 +193,7 @@ import {
     </div>`).join("");
   }
 
+  // 渲染任务活动时间线；没有本地活动时从任务结果生成初始内容。
   function renderActivity() {
     const activity = state.activities.length ? state.activities : state.tasks.map(task => ({
       task_id: task.task_id,
@@ -190,6 +208,7 @@ import {
     </div>`).join("");
   }
 
+  // 根据备份/还原模式切换表单字段和按钮文字。
   function renderCreateForm() {
     const restore = state.mode === "restore";
     $("#create-title").textContent = restore ? "恢复数据" : "创建备份";
@@ -207,6 +226,7 @@ import {
     });
   }
 
+  // 渲染任务详情抽屉，并根据状态决定是否显示取消按钮。
   function renderTaskDetail() {
     const drawer = $("#task-drawer");
     const task = state.selectedTask;
@@ -236,6 +256,7 @@ import {
     $("#drawer-backdrop").classList.remove("is-hidden");
   }
 
+  // 切换主视图，并在进入创建页时同步备份/还原模式。
   function showView(view, mode = state.mode) {
     state.view = view;
     if (view === "create") state.mode = mode;
@@ -243,6 +264,7 @@ import {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  // 从已有备份任务填充还原表单，并默认恢复到原源目录。
   function restoreFromTask(taskId) {
     const task = state.tasks.find(item => item.task_id === taskId);
     if (!task) return;
@@ -254,14 +276,17 @@ import {
       : "已选择备份，请指定恢复到的目录。");
   }
 
+  // 把输入框中的逗号分隔文本转换成后端需要的字符串数组。
   function splitPatterns(value) { return value.split(",").map(item => item.trim()).filter(Boolean); }
 
+  // 把日期输入框转换成后端使用的 Unix 秒数。
   function epochSeconds(value) {
     if (!value) return 0;
     const time = new Date(value).getTime();
     return Number.isFinite(time) ? Math.floor(time / 1000) : 0;
   }
 
+  // 从筛选表单读取并校验所有筛选规则。
   function buildFilterRules() {
     const min = Number($("#min-size").value || 0);
     const max = Number($("#max-size").value || 0);
@@ -285,6 +310,7 @@ import {
     };
   }
 
+  // 根据当前模式组装备份或还原 API 请求体。
   function buildTaskPayload() {
     if (state.mode === "backup") {
       const source = $("#source-path").value.trim();
@@ -302,10 +328,12 @@ import {
     return { archive_path: archive, target_path: target, conflict_policy: $("[name=conflict_policy]:checked").value };
   }
 
+  // 根据当前模式选择调用备份接口还是还原接口。
   function createTask(payload) {
     return state.mode === "backup" ? api.createBackup(payload) : api.createRestore(payload);
   }
 
+  // 后端不可用时创建一个本地演示任务，并用定时器模拟执行过程。
   function demoCreateTask(type, payload) {
     const id = `demo-${type}-${String(Date.now()).slice(-6)}`;
     const task = { task_id: id, type, status: "PENDING", created_at: new Date().toISOString(), source_path: type === "backup" ? payload.source_path : undefined, progress: { stage: "queued", processed_entries: 0, processed_bytes: 0, current_path: type === "backup" ? payload.source_path : payload.archive_path }, result: null };
@@ -330,6 +358,7 @@ import {
     return task;
   }
 
+  // 处理创建表单提交：校验、调用 API/演示逻辑、刷新任务并返回概览页。
   async function submitTask(event) {
     event.preventDefault();
     try {
@@ -350,6 +379,7 @@ import {
     }
   }
 
+  // 从后端重新加载任务列表，并同步当前打开的任务详情。
   async function loadTasks(showError = true) {
     if (!state.apiOnline) return;
     try {
@@ -371,6 +401,7 @@ import {
     }
   }
 
+  // 取消任务并立即更新页面；后端在线时先发送取消请求。
   async function cancelTask(id) {
     const task = state.tasks.find(item => item.task_id === id);
     if (!task || !isActive(task)) return;
@@ -386,6 +417,7 @@ import {
     } catch (error) { toast(error.message || "取消任务失败。", true); }
   }
 
+  // 创建短暂提示消息，用于成功、失败和连接状态反馈。
   function toast(message, error = false) {
     const element = document.createElement("div");
     element.className = `toast ${error ? "error" : ""}`;
@@ -394,16 +426,19 @@ import {
     window.setTimeout(() => element.remove(), 3800);
   }
 
+  // 打开指定任务的详情抽屉。
   function openTask(id) {
     state.selectedTask = state.tasks.find(task => task.task_id === id) || null;
     renderTaskDetail();
   }
 
+  // 关闭任务详情抽屉。
   function closeDrawer() {
     state.selectedTask = null;
     renderTaskDetail();
   }
 
+  // 返回演示模式下的固定目录内容，供路径选择器离线展示。
   function demoEntries(path) {
     const normalized = path.replace(/\/+$/, "") || "/";
     const entries = normalized === "/home/user" ? [
@@ -416,6 +451,7 @@ import {
     return { path: normalized, entries };
   }
 
+  // 加载当前目录并刷新路径选择器中的条目列表。
   async function loadPickerPath(path) {
     const normalized = path.trim() || "/";
     try {
@@ -428,6 +464,7 @@ import {
     } catch (error) { toast(error.message || "无法读取目录。", true); }
   }
 
+  // 打开路径选择器，并把当前输入框内容作为初始目录。
   function openPathPicker(target) {
     state.pickerTarget = target;
     const targetValue = $("#" + target)?.value.trim();
@@ -439,17 +476,20 @@ import {
     loadPickerPath(state.pickerPath);
   }
 
+  // 关闭路径选择器并清除当前选择目标。
   function closePathPicker() {
     $("#path-modal").classList.add("is-hidden");
     $("#path-backdrop").classList.add("is-hidden");
     state.pickerTarget = null;
   }
 
+  // 把路径选择器当前目录写回发起选择的表单字段。
   function selectPickerPath() {
     if (state.pickerTarget) $("#" + state.pickerTarget).value = state.pickerPath;
     closePathPicker();
   }
 
+  // 调用后端在当前目录创建文件夹，然后刷新目录列表。
   async function createPickerDirectory() {
     const name = $("#picker-new-folder").value.trim();
     if (!name) {
@@ -472,6 +512,7 @@ import {
     }
   }
 
+  // 主动检查 API、加载根目录和任务；失败时切换到演示模式。
   async function refresh() {
     try {
       await api.health();
@@ -489,6 +530,7 @@ import {
     render();
   }
 
+  // 注册页面点击、提交、键盘和筛选控件事件。
   function bindEvents() {
     document.addEventListener("click", event => {
       const viewButton = event.target.closest("[data-view]");
@@ -558,6 +600,7 @@ import {
     });
   }
 
+  // 初始化事件、首次渲染、后端连接和任务进度定时刷新。
   async function init() {
     bindEvents();
     render();

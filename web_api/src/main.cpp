@@ -12,10 +12,12 @@ namespace {
 
 std::atomic<bool> running{true};
 
+// 收到终止信号时通知主循环退出，避免直接中断服务线程。
 void stop_handler(int) {
     running = false;
 }
 
+// 将命令行端口解析为 0 到 65535 范围内的整数。
 bool parse_port(const char* value, int& port) {
     char* end = nullptr;
     const long parsed = std::strtol(value, &end, 10);
@@ -28,6 +30,7 @@ bool parse_port(const char* value, int& port) {
 
 }  // namespace
 
+// 读取命令行配置，启动 Runtime 和 WebApiServer，并等待终止信号。
 int main(int argc, char** argv) {
     backup::ApiConfig config;
     for (int index = 1; index < argc; ++index) {

@@ -24,10 +24,12 @@ struct WebApiServer::Impl {
 WebApiServer::WebApiServer(TaskRuntime& runtime, ApiConfig config)
     : impl_(std::make_unique<Impl>(runtime, std::move(config))) {}
 
+// 析构时确保后台 HTTP 线程已经停止。
 WebApiServer::~WebApiServer() {
     stop();
 }
 
+// 启动 Runtime 和 HTTP 服务；端口为 0 时先让 httplib 选择可用端口。
 bool WebApiServer::start() {
     if (impl_->started) return true;
     impl_->runtime.start();
@@ -48,6 +50,7 @@ bool WebApiServer::start() {
     return true;
 }
 
+// 停止 HTTP 服务，并随后停止 Runtime 的 worker。
 void WebApiServer::stop() {
     if (!impl_->started) return;
     impl_->server.stop();
@@ -56,6 +59,7 @@ void WebApiServer::stop() {
     impl_->runtime.shutdown();
 }
 
+// 返回 httplib 实际绑定的端口。
 int WebApiServer::port() const noexcept {
     return impl_->bound_port;
 }

@@ -12,10 +12,11 @@ namespace backup {
 
 using namespace web_api_internal;
 
+// 保存 Runtime 引用和 API 配置；Runtime 必须由上层负责保持有效。
 WebApi::WebApi(TaskRuntime& runtime, ApiConfig config)
     : runtime_(runtime), config_(std::move(config)) {}
 
-// Parse the target and dispatch requests to the API's small set of routes.
+// 解析 target 中的路径和查询参数，再按 HTTP 路由调用 Runtime 或文件系统逻辑。
 ApiResponse WebApi::handle(const std::string& method,
                            const std::string& target,
                            const std::string& body) {
@@ -234,7 +235,7 @@ ApiResponse WebApi::handle(const std::string& method,
     return handle_task_submission(path, body);
 }
 
-// Validate and submit one backup or restore request.
+// 解析 JSON 请求体，校验路径和参数，然后把任务提交给 TaskRuntime。
 ApiResponse WebApi::handle_task_submission(const std::string& path,
                                            const std::string& body) {
     json request;
@@ -313,7 +314,7 @@ ApiResponse WebApi::handle_task_submission(const std::string& path,
     });
 }
 
-// Register normal HTTP routes and the optional SSE progress stream.
+// 注册普通 HTTP 路由和 SSE 进度流；真正的业务分发仍统一经过 handle()。
 void WebApi::mount(httplib::Server& server) {
     auto callback = [this](const httplib::Request& request, httplib::Response& response) {
         const ApiResponse result = handle(request.method, request.target, request.body);

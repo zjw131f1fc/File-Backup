@@ -8,6 +8,7 @@ namespace backup::web_api_internal {
 
 namespace {
 
+// 读取字符串数组字段；字段缺省视为空数组。
 bool read_string_array(const json& object,
                        const char* key,
                        std::vector<std::string>& values) {
@@ -24,6 +25,7 @@ bool read_string_array(const json& object,
     return true;
 }
 
+// 读取无符号 UID 数组字段，拒绝负数和非数字值。
 bool read_uid_array(const json& object,
                     const char* key,
                     std::vector<uid_t>& values) {
@@ -42,10 +44,12 @@ bool read_uid_array(const json& object,
 
 }  // namespace
 
+// 序列化 JSON 响应，并统一设置 JSON Content-Type。
 ApiResponse json_response(int status, const json& body) {
     return {status, "application/json; charset=utf-8", body.dump()};
 }
 
+// 使用统一 error 对象构造客户端可识别的错误响应。
 ApiResponse error_response(int status,
                            const std::string& code,
                            const std::string& message) {
@@ -56,6 +60,7 @@ ApiResponse error_response(int status,
     }} });
 }
 
+// 把 Runtime 错误码映射为合适的 HTTP 状态码。
 ApiResponse submission_error_response(const TaskSubmission& submission) {
     int status = 500;
     if (submission.error_code == "OUTPUT_CONFLICT" ||
@@ -71,26 +76,31 @@ ApiResponse submission_error_response(const TaskSubmission& submission) {
     return error_response(status, code, submission.result.message);
 }
 
+// 判断路径是否为目录，并把文件系统错误转换成 false。
 bool is_directory(const std::string& path) {
     std::error_code error;
     return std::filesystem::is_directory(
         std::filesystem::symlink_status(path, error)) && !error;
 }
 
+// 判断路径是否为普通文件，并把文件系统错误转换成 false。
 bool is_regular_file(const std::string& path) {
     std::error_code error;
     return std::filesystem::is_regular_file(
         std::filesystem::symlink_status(path, error)) && !error;
 }
 
+// 检查当前进程是否拥有读取路径的权限。
 bool is_readable(const std::string& path) {
     return ::access(path.c_str(), R_OK) == 0;
 }
 
+// 检查路径是目录且当前进程可以写入。
 bool is_writable_directory(const std::filesystem::path& path) {
     return std::filesystem::is_directory(path) && ::access(path.c_str(), W_OK) == 0;
 }
 
+// 校验归档名称只能是单个文件名，不能包含目录跳转。
 bool valid_archive_name(const std::string& name) {
     if (name.empty()) return true;
     const std::filesystem::path path(name);
@@ -98,6 +108,7 @@ bool valid_archive_name(const std::string& name) {
         name != "." && name != "..";
 }
 
+// 校验新建目录名称只能是当前目录下的单个名称。
 bool valid_directory_name(const std::string& name) {
     if (name.empty()) return false;
     const std::filesystem::path path(name);
@@ -105,6 +116,7 @@ bool valid_directory_name(const std::string& name) {
         name != "." && name != "..";
 }
 
+// 尽可能解析符号链接和相对路径，得到用于比较的规范路径。
 std::filesystem::path normalized_path(const std::filesystem::path& path) {
     std::error_code error;
     const auto result = std::filesystem::weakly_canonical(path, error);
@@ -113,6 +125,7 @@ std::filesystem::path normalized_path(const std::filesystem::path& path) {
 
 namespace {
 
+// 判断 child 是否严格位于 parent 目录下。
 bool is_inside(const std::filesystem::path& child,
                const std::filesystem::path& parent) {
     const auto relative = normalized_path(child).lexically_relative(normalized_path(parent));
@@ -121,6 +134,7 @@ bool is_inside(const std::filesystem::path& child,
 
 }  // namespace
 
+// 判断两个路径相同，或 child 位于 parent 内部。
 bool is_same_or_inside(const std::filesystem::path& child,
                        const std::filesystem::path& parent) {
     const auto normalized_child = normalized_path(child);
@@ -129,6 +143,7 @@ bool is_same_or_inside(const std::filesystem::path& child,
         is_inside(normalized_child, normalized_parent);
 }
 
+// 判断路径是否位于任一允许根目录内。
 bool is_allowed_path(const std::filesystem::path& path,
                      const std::vector<std::string>& roots) {
     const auto normalized = normalized_path(path);
@@ -141,6 +156,7 @@ bool is_allowed_path(const std::filesystem::path& path,
     return false;
 }
 
+// 从 JSON 对象读取必填非空字符串字段。
 bool read_string(const json& object,
                  const char* key,
                  std::string& value) {
@@ -149,6 +165,7 @@ bool read_string(const json& object,
     return !value.empty();
 }
 
+// 解析并校验备份筛选条件，转换为子模块使用的 FilterRules。
 bool read_filter_rules(const json& object, FilterRules& rules) {
     if (!object.is_object() ||
         !read_string_array(object, "include_paths", rules.include_paths) ||
@@ -207,6 +224,7 @@ bool read_filter_rules(const json& object, FilterRules& rules) {
          rules.min_size <= rules.max_size);
 }
 
+// 把内部条目类型枚举转换为 API 字符串。
 std::string entry_type_name(EntryType type) {
     switch (type) {
         case EntryType::REGULAR_FILE: return "REGULAR_FILE";
@@ -220,6 +238,7 @@ std::string entry_type_name(EntryType type) {
     return "";
 }
 
+// 把 API 传入的冲突策略字符串转换为内部枚举。
 bool parse_conflict_policy(const std::string& value, ConflictPolicy& policy) {
     if (value == "SKIP") policy = ConflictPolicy::SKIP;
     else if (value == "OVERWRITE") policy = ConflictPolicy::OVERWRITE;
@@ -228,6 +247,7 @@ bool parse_conflict_policy(const std::string& value, ConflictPolicy& policy) {
     return true;
 }
 
+// 解码 URL 路径和查询参数中的百分号编码及加号空格。
 std::string url_decode(const std::string& value) {
     std::string result;
     result.reserve(value.size());
@@ -252,6 +272,7 @@ std::string url_decode(const std::string& value) {
     return result;
 }
 
+// 从 query string 中查找指定键，并解码对应值。
 std::string query_value(const std::string& query, const std::string& key) {
     std::size_t start = 0;
     while (start <= query.size()) {
@@ -268,6 +289,7 @@ std::string query_value(const std::string& query, const std::string& key) {
     return {};
 }
 
+// 把任务状态枚举转换为前端使用的大写字符串。
 std::string task_status_name(TaskStatus status) {
     switch (status) {
         case TaskStatus::PENDING: return "PENDING";
@@ -280,6 +302,7 @@ std::string task_status_name(TaskStatus status) {
     return "FAILED";
 }
 
+// 判断任务是否已经结束，供响应组装和事件处理使用。
 bool is_terminal_status(TaskStatus status) {
     return status == TaskStatus::SUCCESS ||
         status == TaskStatus::PARTIAL_SUCCESS ||
@@ -287,6 +310,7 @@ bool is_terminal_status(TaskStatus status) {
         status == TaskStatus::CANCELLED;
 }
 
+// 将单个任务的状态、进度和最终结果转换为 API JSON。
 json task_json(const Task& task) {
     json result = nullptr;
     if (task.status != TaskStatus::PENDING && task.status != TaskStatus::RUNNING) {
@@ -315,6 +339,7 @@ json task_json(const Task& task) {
     };
 }
 
+// 在 task_json 基础上补充任务类型和创建/开始/结束时间。
 json snapshot_json(const TaskSnapshot& snapshot) {
     auto result = task_json(snapshot.task);
     result["type"] = snapshot.type;
@@ -329,6 +354,7 @@ json snapshot_json(const TaskSnapshot& snapshot) {
     return result;
 }
 
+// 将目录迭代器条目转换为路径选择器使用的 JSON。
 json filesystem_entry_json(const std::filesystem::directory_entry& entry) {
     std::error_code error;
     const auto status = entry.symlink_status(error);
