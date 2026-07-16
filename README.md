@@ -87,6 +87,17 @@ ctest -R scheduler
 ctest -R common
 ```
 
+项目级 HTTP 验收测试：
+
+```bash
+ctest -R web_api_acceptance --output-on-failure
+```
+
+该测试会在临时目录中生成普通文件、目录、符号链接、硬链接、FIFO 和
+Unix Socket，并通过真实 HTTP 请求完成备份、还原、筛选、并发、取消、
+冲突和错误响应验证。字符设备和块设备测试需要 `root` 或
+`CAP_MKNOD`，不具备权限时会单独跳过。
+
 ## 接口设计
 
 ### 核心原则

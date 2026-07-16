@@ -133,7 +133,14 @@ void TaskManager::complete_task(const std::string& task_id, const Result& result
         snapshot = it->second;
         observer = observer_;
     }
-    if (observer) observer(task_id, snapshot, "status");
+    if (observer) {
+        observer(task_id, snapshot, "status");
+        observer(task_id, snapshot, "result");
+        if (result.status == Status::FAILED ||
+            result.status == Status::PARTIAL_SUCCESS) {
+            observer(task_id, snapshot, "error");
+        }
+    }
 }
 
 void TaskManager::set_observer(TaskObserver observer) {
