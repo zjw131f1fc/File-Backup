@@ -30,11 +30,7 @@ std::optional<EntryType> entry_type(mode_t mode) {
 bool fill_entry(const std::filesystem::path& path,
                 const std::filesystem::path& source_root,
                 EntryInfo& entry,
-                struct stat& metadata) {
-    if (::lstat(path.c_str(), &metadata) != 0) {
-        return false;
-    }
-
+                const struct stat& metadata) {
     const auto type = entry_type(metadata.st_mode);
     if (!type) {
         return false;
@@ -87,7 +83,7 @@ public:
         uint64_t processed_entries = 0;
         uint64_t processed_bytes = 0;
         std::filesystem::recursive_directory_iterator entries(
-            source, std::filesystem::directory_options::skip_permission_denied, error);
+            source, std::filesystem::directory_options::none, error);
         if (error) {
             return failed_result("failed to scan source path: " + source_path);
         }
@@ -113,6 +109,8 @@ public:
                 continue;
             }
 
+            // Only archived paths may become hard-link targets. Registering an
+            // excluded first occurrence would create a dangling archive entry.
             if (entry.type == EntryType::REGULAR_FILE && metadata.st_nlink > 1) {
                 const auto key = std::make_pair(metadata.st_dev, metadata.st_ino);
                 const auto existing = hard_links.find(key);
@@ -139,6 +137,8 @@ public:
                 return write_result;
             }
 
+            // Progress describes entries successfully handed to the archive,
+            // rather than every filesystem object observed during traversal.
             ++processed_entries;
             if (entry.type == EntryType::REGULAR_FILE) {
                 processed_bytes += entry.size;
