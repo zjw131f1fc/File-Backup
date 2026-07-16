@@ -4,6 +4,7 @@
 #include <sstream>
 #include <vector>
 #include <cstring>
+#include <cstdio>
 
 namespace backup {
 
@@ -60,6 +61,42 @@ struct CachedEntry {
     EntryInfo info;
     std::streamoff content_offset;  // 文件内容在归档中的偏移（-1 表示无内容）
     uint64_t content_len;
+};
+
+// ===== 流式读取 streambuf =====
+// 从文件的指定偏移开始，最多读取 limit 字节，不一次性加载到内存
+class LimitedStreamBuf : public std::streambuf {
+public:
+    LimitedStreamBuf(const std::string& path, std::streamoff offset, uint64_t limit)
+        : file_(path, std::ios::binary), limit_(limit), pos_(0) {
+        if (!file_.seekg(offset)) {
+            file_.setstate(std::ios::badbit);
+        }
+    }
+
+    bool is_open() const { return file_.is_open() && file_.good(); }
+
+protected:
+    int underflow() override {
+        if (pos_ >= limit_ || file_.eof()) {
+            return traits_type::eof();
+        }
+        uint64_t to_read = std::min<uint64_t>(sizeof(buf_), limit_ - pos_);
+        file_.read(buf_, to_read);
+        std::streamsize got = file_.gcount();
+        if (got <= 0) {
+            return traits_type::eof();
+        }
+        pos_ += got;
+        setg(buf_, buf_, buf_ + got);
+        return traits_type::to_int_type(*gptr());
+    }
+
+private:
+    std::ifstream file_;
+    uint64_t limit_;
+    uint64_t pos_;
+    char buf_[8192];
 };
 
 }  // anonymous namespace
@@ -212,6 +249,15 @@ public:
         return success("");
     }
 
+    // 自定义 istream：析构时自动删除关联的 streambuf
+    class OwningStream : public std::istream {
+    public:
+        explicit OwningStream(std::streambuf* sb) : std::istream(sb), sb_(sb) {}
+        ~OwningStream() override { delete sb_; }
+    private:
+        std::streambuf* sb_;
+    };
+
     std::unique_ptr<std::istream> open_content(const EntryInfo& entry_info) override {
         for (const auto& ce : entries_) {
             if (ce.info.path == entry_info.path) {
@@ -221,14 +267,14 @@ public:
                 if (ce.content_len == 0) {
                     return std::make_unique<std::istringstream>();
                 }
-                auto ifs = std::make_unique<std::ifstream>(archive_path_, std::ios::binary);
-                if (!ifs || !ifs->seekg(ce.content_offset)) {
+                // 流式读取：从文件直接流式读取，不加载全部内容到内存
+                auto buf = new LimitedStreamBuf(
+                    archive_path_, ce.content_offset, ce.content_len);
+                if (!buf->is_open()) {
+                    delete buf;
                     return nullptr;
                 }
-                std::string data(ce.content_len, '\0');
-                ifs->read(&data[0], ce.content_len);
-                if (!*ifs) return nullptr;
-                return std::make_unique<std::istringstream>(std::move(data));
+                return std::make_unique<OwningStream>(buf);
             }
         }
         return nullptr;

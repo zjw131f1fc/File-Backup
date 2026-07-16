@@ -294,3 +294,206 @@ TEST(ArchiveFunctional, AbortThenCreateSameName) {
     auto reader = open_archive(path);
     EXPECT_EQ(reader->validate().status, Status::SUCCESS);
 }
+
+// ===== 11. 流式写入 — 大输入流分块 =====
+TEST(ArchiveFunctional, StreamWriteLargeContent) {
+    TempDir tmp;
+    auto path = tmp.path() + "/stream_large.dat";
+    {
+        auto writer = create_archive(path);
+
+        // 模拟大文件流：生成 2MB 内容
+        std::string chunk(65536, 'A');
+        std::ostringstream large_content;
+        for (int i = 0; i < 32; i++) {
+            large_content << chunk;
+        }
+        std::string expected = large_content.str();
+
+        EntryInfo e;
+        e.path = "large_stream.bin";
+        e.type = EntryType::REGULAR_FILE;
+        e.size = expected.size();
+        std::istringstream content_stream(expected);
+        writer->add_entry(e, content_stream);
+        writer->commit();
+    }
+
+    auto reader = open_archive(path);
+    reader->validate();
+    EntryInfo info;
+    reader->next_entry(info);
+    EXPECT_EQ(info.path, "large_stream.bin");
+    EXPECT_EQ(info.size, 2 * 1024 * 1024);
+
+    auto stream = reader->open_content(info);
+    ASSERT_NE(stream, nullptr);
+    std::ostringstream oss;
+    oss << stream->rdbuf();
+    EXPECT_EQ(oss.str().size(), 2 * 1024 * 1024);
+}
+
+// ===== 12. 流式写入 — 多次 add_entry 交替 =====
+TEST(ArchiveFunctional, StreamMultipleEntries) {
+    TempDir tmp;
+    auto path = tmp.path() + "/multi_stream.dat";
+    const int N = 50;
+    {
+        auto writer = create_archive(path);
+        for (int i = 0; i < N; i++) {
+            EntryInfo e;
+            e.path = "file_" + std::to_string(i) + ".dat";
+            e.type = EntryType::REGULAR_FILE;
+            e.size = 100;
+            std::string data(100, 'A' + (i % 26));
+            std::istringstream content(data);
+            auto r = writer->add_entry(e, content);
+            EXPECT_EQ(r.status, Status::SUCCESS);
+        }
+        writer->commit();
+    }
+
+    auto reader = open_archive(path);
+    reader->validate();
+    int count = 0;
+    while (reader->has_next_entry()) {
+        EntryInfo info;
+        reader->next_entry(info);
+        EXPECT_EQ(info.type, EntryType::REGULAR_FILE);
+        auto stream = reader->open_content(info);
+        ASSERT_NE(stream, nullptr);
+        std::ostringstream oss;
+        oss << stream->rdbuf();
+        EXPECT_EQ(oss.str().size(), 100);
+        count++;
+    }
+    EXPECT_EQ(count, N);
+}
+
+// ===== 13. 边界 — 1 字节文件 =====
+TEST(ArchiveFunctional, SingleByteFile) {
+    TempDir tmp;
+    auto path = tmp.path() + "/1byte.dat";
+    {
+        auto writer = create_archive(path);
+        EntryInfo e;
+        e.path = "x";
+        e.type = EntryType::REGULAR_FILE;
+        e.size = 1;
+        std::istringstream content("A");
+        writer->add_entry(e, content);
+        writer->commit();
+    }
+    auto reader = open_archive(path);
+    EXPECT_EQ(reader->validate().status, Status::SUCCESS);
+    EntryInfo info;
+    reader->next_entry(info);
+    auto s = reader->open_content(info);
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->get(), 'A');
+}
+
+// ===== 14. 边界 — 内容等于缓冲区大小（8192 字节）=====
+TEST(ArchiveFunctional, ContentExactlyBufferSize) {
+    TempDir tmp;
+    auto path = tmp.path() + "/bufsize.dat";
+    std::string content(8192, 'B');
+    {
+        auto writer = create_archive(path);
+        EntryInfo e;
+        e.path = "buf.txt";
+        e.type = EntryType::REGULAR_FILE;
+        e.size = content.size();
+        std::istringstream iss(content);
+        writer->add_entry(e, iss);
+        writer->commit();
+    }
+    auto reader = open_archive(path);
+    reader->validate();
+    EntryInfo info;
+    reader->next_entry(info);
+    auto s = reader->open_content(info);
+    ASSERT_NE(s, nullptr);
+    std::ostringstream oss;
+    oss << s->rdbuf();
+    EXPECT_EQ(oss.str().size(), 8192);
+    EXPECT_EQ(oss.str(), content);
+}
+
+// ===== 15. 边界 — 内容跨缓冲区边界（8193 字节）=====
+TEST(ArchiveFunctional, ContentCrossBufferBoundary) {
+    TempDir tmp;
+    auto path = tmp.path() + "/cross.dat";
+    std::string content(8193, 'C');
+    {
+        auto writer = create_archive(path);
+        EntryInfo e;
+        e.path = "cross.txt";
+        e.type = EntryType::REGULAR_FILE;
+        e.size = content.size();
+        std::istringstream iss(content);
+        writer->add_entry(e, iss);
+        writer->commit();
+    }
+    auto reader = open_archive(path);
+    reader->validate();
+    EntryInfo info;
+    reader->next_entry(info);
+    auto s = reader->open_content(info);
+    ASSERT_NE(s, nullptr);
+    std::ostringstream oss;
+    oss << s->rdbuf();
+    EXPECT_EQ(oss.str().size(), 8193);
+    EXPECT_EQ(oss.str(), content);
+}
+
+// ===== 16. 边界 — 7 种条目类型全部写入 =====
+TEST(ArchiveFunctional, AllSevenEntryTypes) {
+    TempDir tmp;
+    auto path = tmp.path() + "/alltypes.dat";
+    {
+        auto writer = create_archive(path);
+        auto add = [&](EntryType t, const std::string& p) {
+            EntryInfo e;
+            e.path = p;
+            e.type = t;
+            if (t == EntryType::REGULAR_FILE) {
+                e.size = 4;
+                std::istringstream c("data");
+                writer->add_entry(e, c);
+            } else if (t == EntryType::SYMBOLIC_LINK) {
+                e.link_target = "target";
+                writer->add_entry(e);
+            } else {
+                writer->add_entry(e);
+            }
+        };
+        add(EntryType::REGULAR_FILE, "f.txt");
+        add(EntryType::DIRECTORY, "dir");
+        add(EntryType::SYMBOLIC_LINK, "link");
+        add(EntryType::HARD_LINK, "hard");
+        add(EntryType::FIFO, "pipe");
+        add(EntryType::CHARACTER_DEVICE, "tty");
+        add(EntryType::BLOCK_DEVICE, "sda");
+        writer->commit();
+    }
+    auto reader = open_archive(path);
+    EXPECT_EQ(reader->validate().status, Status::SUCCESS);
+    int count = 0;
+    while (reader->has_next_entry()) {
+        EntryInfo info;
+        EXPECT_EQ(reader->next_entry(info).status, Status::SUCCESS);
+        count++;
+    }
+    EXPECT_EQ(count, 7);
+}
+
+// ===== 17. 边界 — commit 两次第二次失败 =====
+TEST(ArchiveFunctional, DoubleCommitFails) {
+    TempDir tmp;
+    auto path = tmp.path() + "/double_commit.dat";
+    auto writer = create_archive(path);
+    EXPECT_EQ(writer->commit().status, Status::SUCCESS);
+    auto r = writer->commit();
+    EXPECT_EQ(r.status, Status::FAILED);
+}
