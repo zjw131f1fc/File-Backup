@@ -113,6 +113,32 @@ TEST(WebApiContract, BackupReturnsAcceptedTask) {
     runtime.shutdown();
 }
 
+TEST(WebApiContract, BackupTaskExposesOriginalSourcePath) {
+    TempDir temp;
+    const std::string source = temp.create_dir("source");
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager);
+    WebApi api(runtime);
+
+    const auto response = api.handle(
+        "POST", "/api/backup", json{
+            {"source_path", source},
+            {"output_path", temp.path()},
+            {"filter_rules", json::object()}
+        }.dump());
+
+    ASSERT_EQ(response.status, 202);
+    const auto task_id = response_json(response)["task_id"].get<std::string>();
+
+    const auto list_body = response_json(api.handle("GET", "/api/tasks"));
+    ASSERT_EQ(list_body["tasks"].size(), 1u);
+    EXPECT_EQ(list_body["tasks"][0]["source_path"], source);
+
+    const auto detail_body = response_json(
+        api.handle("GET", "/api/tasks/" + task_id));
+    EXPECT_EQ(detail_body["source_path"], source);
+}
+
 TEST(WebApiContract, UsesDefaultArchiveNameAndRenamesConcurrentTasks) {
     TempDir temp;
     const std::string source = temp.create_dir("source");

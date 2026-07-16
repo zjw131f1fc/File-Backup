@@ -41,6 +41,7 @@ struct TaskSnapshot {
     std::string created_at;
     std::string started_at;
     std::string finished_at;
+    std::string source_path;
 };
 
 struct TaskEvent {

@@ -8,6 +8,7 @@
       status: "RUNNING",
       created_at: new Date(Date.now() - 1000 * 60 * 8).toISOString(),
       started_at: new Date(Date.now() - 1000 * 60 * 7).toISOString(),
+      source_path: "/home/user/data",
       progress: { stage: "scanning", processed_entries: 1842, processed_bytes: 73400320, current_path: "/home/user/data/projects/report.md" },
       result: null
     },
@@ -28,6 +29,7 @@
       created_at: new Date(Date.now() - 1000 * 60 * 85).toISOString(),
       started_at: new Date(Date.now() - 1000 * 60 * 84).toISOString(),
       finished_at: new Date(Date.now() - 1000 * 60 * 79).toISOString(),
+      source_path: "/home/user/data",
       progress: { stage: "completed", processed_entries: 291, processed_bytes: 10485760, current_path: "/home/user/data" },
       result: { status: "PARTIAL_SUCCESS", message: "2 entries could not be read", error_count: 2, warning_count: 1 }
     }
@@ -328,7 +330,10 @@
     if (!task) return;
     showView("create", "restore");
     $("#archive-path").value = taskPath(task);
-    toast("已选择最近备份，请指定恢复到的目录。");
+    $("#target-path").value = task.source_path || "";
+    toast(task.source_path
+      ? "已选择备份，默认恢复到原目录；如有需要可以修改。"
+      : "已选择备份，请指定恢复到的目录。");
   }
 
   function splitPatterns(value) { return value.split(",").map(item => item.trim()).filter(Boolean); }
@@ -364,7 +369,7 @@
 
   function demoCreateTask(type, payload) {
     const id = `demo-${type}-${String(Date.now()).slice(-6)}`;
-    const task = { task_id: id, type, status: "PENDING", created_at: new Date().toISOString(), progress: { stage: "queued", processed_entries: 0, processed_bytes: 0, current_path: type === "backup" ? payload.source_path : payload.archive_path }, result: null };
+    const task = { task_id: id, type, status: "PENDING", created_at: new Date().toISOString(), source_path: type === "backup" ? payload.source_path : undefined, progress: { stage: "queued", processed_entries: 0, processed_bytes: 0, current_path: type === "backup" ? payload.source_path : payload.archive_path }, result: null };
     state.tasks.unshift(task);
     addActivity(task, `${typeLabel(type)}任务已创建`);
     render();

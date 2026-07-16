@@ -325,6 +325,9 @@ json task_json(const Task& task) {
 json snapshot_json(const TaskSnapshot& snapshot) {
     auto result = task_json(snapshot.task);
     result["type"] = snapshot.type;
+    if (snapshot.type == "backup" && !snapshot.source_path.empty()) {
+        result["source_path"] = snapshot.source_path;
+    }
     result["created_at"] = snapshot.created_at;
     result["started_at"] = snapshot.started_at.empty()
         ? json(nullptr) : json(snapshot.started_at);

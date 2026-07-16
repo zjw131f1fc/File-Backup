@@ -63,6 +63,7 @@ struct TaskRuntime::Impl {
     struct Metadata {
         std::string type;
         std::string output_path;
+        std::string source_path;
         std::string created_at;
         std::string started_at;
         std::string finished_at;
@@ -194,6 +195,8 @@ struct TaskRuntime::Impl {
         Metadata task_metadata;
         task_metadata.type = job.kind == TaskKind::BACKUP ? "backup" : "restore";
         task_metadata.output_path = job.backup_request.output_path;
+        task_metadata.source_path = job.kind == TaskKind::BACKUP
+            ? job.backup_request.source_path : std::string();
         task_metadata.created_at = timestamp_now();
         metadata.emplace(submission_task_id, task_metadata);
         order.push_back(submission_task_id);
@@ -322,7 +325,7 @@ struct TaskRuntime::Impl {
             const auto& item = metadata_it->second;
             result.push_back(TaskSnapshot{
                 task_manager.get_task(task_id), item.type, item.created_at,
-                item.started_at, item.finished_at
+                item.started_at, item.finished_at, item.source_path
             });
         }
         return result;

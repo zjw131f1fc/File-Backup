@@ -288,6 +288,7 @@ GET /api/tasks?type=backup&limit=20
       "task_id": "task_1_123456",
       "type": "backup",
       "status": "SUCCESS",
+      "source_path": "/home/user/data",
       "message": "backup completed successfully",
       "progress": {
         "stage": "completed",
@@ -299,6 +300,8 @@ GET /api/tasks?type=backup&limit=20
   ]
 }
 ```
+
+备份任务的 `source_path` 是创建备份时提交的原始目录。前端从恢复点创建恢复任务时，应将它作为 `target_path` 的默认值；用户仍可以改为其他目录。还原任务不返回 `source_path`。
 
 ### 3.7 取消任务
 
