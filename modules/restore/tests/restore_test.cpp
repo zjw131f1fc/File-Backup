@@ -378,3 +378,49 @@ TEST(RestorerContract, RestoreMetadataMissingTargetFails) {
 
     EXPECT_EQ(r.status, Status::FAILED);
 }
+
+TEST(RestorerContract, RejectsPathTraversal) {
+    TempDir restore_tmp;
+    auto restorer = create_restorer();
+    auto reader = open_archive("/tmp/nonexistent_archive");
+    EntryInfo entry;
+    entry.path = "../escape.txt";
+    entry.type = EntryType::REGULAR_FILE;
+
+    Result r = restorer->restore_entry(
+        restore_tmp.path(), entry, *reader, ConflictPolicy::OVERWRITE);
+    EXPECT_EQ(r.status, Status::FAILED);
+}
+
+TEST(RestorerContract, RejectsSymlinkInParentChain) {
+    TempDir restore_tmp;
+    restore_tmp.create_symlink("redirect", "/tmp");
+    auto restorer = create_restorer();
+    auto reader = open_archive("/tmp/nonexistent_archive");
+    EntryInfo entry;
+    entry.path = "redirect/escape.txt";
+    entry.type = EntryType::REGULAR_FILE;
+
+    Result r = restorer->restore_entry(
+        restore_tmp.path(), entry, *reader, ConflictPolicy::OVERWRITE);
+    EXPECT_EQ(r.status, Status::FAILED);
+}
+
+TEST(RestorerContract, FailedOverwritePreservesExistingFile) {
+    TempDir restore_tmp;
+    restore_tmp.create_file("existing.txt", "original");
+    auto restorer = create_restorer();
+    auto reader = open_archive("/tmp/nonexistent_archive");
+    EntryInfo entry;
+    entry.path = "existing.txt";
+    entry.type = EntryType::REGULAR_FILE;
+    entry.size = 10;
+
+    Result r = restorer->restore_entry(
+        restore_tmp.path(), entry, *reader, ConflictPolicy::OVERWRITE);
+    EXPECT_EQ(r.status, Status::FAILED);
+    std::ifstream input(restore_tmp.path() + "/existing.txt");
+    std::ostringstream content;
+    content << input.rdbuf();
+    EXPECT_EQ(content.str(), "original");
+}

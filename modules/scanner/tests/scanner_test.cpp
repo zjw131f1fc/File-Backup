@@ -232,3 +232,52 @@ TEST(ScannerContract, ScanSourceNotFound) {
     Result r = scanner->scan_and_backup("/nonexistent/path", *filter, *writer, nullptr);
     EXPECT_EQ(r.status, Status::FAILED);
 }
+
+TEST(ScannerContract, ReportsCumulativeProgress) {
+    TempDir tmp;
+    tmp.create_file("one.txt", "abc");
+    tmp.create_file("two.txt", "12345");
+
+    auto scanner = create_scanner();
+    auto filter = create_filter(FilterRules{});
+    auto writer = create_archive(tmp.path() + "/archive.dat");
+    Progress last;
+    int callbacks = 0;
+    Result r = scanner->scan_and_backup(
+        tmp.path(), *filter, *writer,
+        [&](const Progress& progress) {
+            last = progress;
+            ++callbacks;
+            return true;
+        });
+
+    EXPECT_EQ(r.status, Status::SUCCESS);
+    EXPECT_EQ(callbacks, 2);
+    EXPECT_EQ(last.processed_entries, 2u);
+    EXPECT_EQ(last.processed_bytes, 8u);
+}
+
+TEST(ScannerContract, FilteredHardLinkNeverBecomesArchiveTarget) {
+    TempDir tmp;
+    tmp.create_file("excluded.txt", "data");
+    tmp.create_hardlink("included.txt", "excluded.txt");
+
+    FilterRules rules;
+    rules.exclude_names = {"excluded.txt"};
+    auto filter = create_filter(rules);
+    auto scanner = create_scanner();
+    auto writer = create_archive(tmp.path() + "/archive.dat");
+
+    ASSERT_EQ(scanner->scan_and_backup(tmp.path(), *filter, *writer, nullptr).status,
+              Status::SUCCESS);
+    ASSERT_EQ(writer->commit().status, Status::SUCCESS);
+    auto reader = open_archive(tmp.path() + "/archive.dat");
+    ASSERT_EQ(reader->validate().status, Status::SUCCESS);
+
+    ASSERT_TRUE(reader->has_next_entry());
+    EntryInfo info;
+    ASSERT_EQ(reader->next_entry(info).status, Status::SUCCESS);
+    EXPECT_EQ(info.path, "included.txt");
+    EXPECT_EQ(info.type, EntryType::REGULAR_FILE);
+    EXPECT_FALSE(reader->has_next_entry());
+}
