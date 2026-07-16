@@ -8,8 +8,15 @@
 #include "common/filter_rules.h"
 #include "common/backup_request.h"
 #include "common/restore_request.h"
+#include "../../tests/helpers/temp_dir.h"
 
 using namespace backup;
+
+TEST(Common, TempDirPathExists) {
+    backup::testing::TempDir temp;
+    EXPECT_FALSE(temp.path().empty());
+    EXPECT_TRUE(std::filesystem::exists(temp.path()));
+}
 
 TEST(Common, StatusValues) {
     EXPECT_EQ(static_cast<int>(Status::SUCCESS),      0);

@@ -6,18 +6,13 @@ namespace backup {
 
 RestoreScheduler::RestoreScheduler(
     TaskManager& task_manager,
-    IArchiveReader* archive_reader,
-    IRestorer* restorer
+    IArchiveReader& archive_reader,
+    IRestorer& restorer
 )
     : task_manager_(task_manager)
-    , reader_(archive_reader)
-    , restorer_(restorer)
+    , reader_(&archive_reader)
+    , restorer_(&restorer)
 {
-    if (!restorer_) {
-        default_restorer_ = create_restorer();
-        restorer_ = default_restorer_.get();
-    }
-    // reader 在 run() 中动态创建
 }
 
 Result RestoreScheduler::run(const std::string& task_id, const RestoreRequest& request) {
@@ -29,22 +24,6 @@ Result RestoreScheduler::run(const std::string& task_id, const RestoreRequest& r
         task_manager_.update_progress(task_id, p);
     }
 
-    // 打开归档
-    std::unique_ptr<IArchiveReader> local_reader;
-    IArchiveReader* reader = reader_;
-    if (!reader) {
-        local_reader = open_archive(request.archive_path);
-        reader = local_reader.get();
-    }
-
-    if (!reader) {
-        Result r;
-        r.status = Status::FAILED;
-        r.message = "failed to open archive";
-        task_manager_.complete_task(task_id, r);
-        return r;
-    }
-
     // 校验归档
     {
         Progress p;
@@ -52,7 +31,7 @@ Result RestoreScheduler::run(const std::string& task_id, const RestoreRequest& r
         task_manager_.update_progress(task_id, p);
     }
 
-    Result validate_result = reader->validate();
+    Result validate_result = reader_->validate();
     if (!validate_result.ok()) {
         Result r;
         r.status = Status::FAILED;
@@ -66,7 +45,7 @@ Result RestoreScheduler::run(const std::string& task_id, const RestoreRequest& r
     int warning_count = 0;
     Result final_result;
 
-    while (reader->has_next_entry()) {
+    while (reader_->has_next_entry()) {
         // 每次迭代前检查是否被取消
         Task task = task_manager_.get_task(task_id);
         if (task.status == TaskStatus::CANCELLED) {
@@ -77,7 +56,7 @@ Result RestoreScheduler::run(const std::string& task_id, const RestoreRequest& r
         }
 
         EntryInfo entry_info;
-        Result next_result = reader->next_entry(entry_info);
+        Result next_result = reader_->next_entry(entry_info);
         if (!next_result.ok()) {
             error_count++;
             continue;
@@ -91,7 +70,7 @@ Result RestoreScheduler::run(const std::string& task_id, const RestoreRequest& r
 
         // 恢复条目（恢复器内部处理所有类型和文件流）
         Result restore_result = restorer_->restore_entry(
-            request.target_path, entry_info, *reader, request.conflict_policy
+            request.target_path, entry_info, *reader_, request.conflict_policy
         );
 
         if (!restore_result.ok()) {

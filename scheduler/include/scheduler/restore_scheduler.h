@@ -14,8 +14,8 @@ class RestoreScheduler {
 public:
     explicit RestoreScheduler(
         TaskManager& task_manager,
-        IArchiveReader* archive_reader = nullptr,
-        IRestorer* restorer = nullptr
+        IArchiveReader& archive_reader,
+        IRestorer& restorer
     );
 
     // 执行还原任务
@@ -23,8 +23,6 @@ public:
 
 private:
     TaskManager& task_manager_;
-    std::unique_ptr<IArchiveReader> default_reader_;
-    std::unique_ptr<IRestorer> default_restorer_;
     IArchiveReader* reader_;
     IRestorer* restorer_;
 };

@@ -7,11 +7,14 @@
 #include <unordered_map>
 #include <mutex>
 #include <atomic>
+#include <functional>
 
 namespace backup {
 
 class TaskManager {
 public:
+    using TaskObserver = std::function<void(const std::string&, const Task&, const std::string&)>;
+
     // 创建备份任务，返回 task_id
     std::string create_backup_task(const BackupRequest& request);
 
@@ -20,6 +23,9 @@ public:
 
     // 获取任务信息
     Task get_task(const std::string& task_id) const;
+
+    // 将等待中的任务标记为运行中
+    bool start_task(const std::string& task_id);
 
     // 取消任务（仅在 PENDING 或 RUNNING 时生效）
     bool cancel_task(const std::string& task_id);
@@ -30,12 +36,15 @@ public:
     // 标记任务完成
     void complete_task(const std::string& task_id, const Result& result);
 
+    void set_observer(TaskObserver observer);
+
     // 生成唯一 task_id
     static std::string generate_task_id();
 
 private:
     std::unordered_map<std::string, Task> tasks_;
     mutable std::mutex mutex_;
+    TaskObserver observer_;
     static std::atomic<uint64_t> id_counter_;
 };
 

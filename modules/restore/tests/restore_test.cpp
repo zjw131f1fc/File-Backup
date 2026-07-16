@@ -11,6 +11,20 @@
 using namespace backup;
 using namespace backup::testing;
 
+namespace {
+
+class ShortContentReader : public IArchiveReader {
+public:
+    Result validate() override { return {}; }
+    bool has_next_entry() override { return false; }
+    Result next_entry(EntryInfo&) override { return {}; }
+    std::unique_ptr<std::istream> open_content(const EntryInfo&) override {
+        return std::make_unique<std::istringstream>("short");
+    }
+};
+
+}  // namespace
+
 // 辅助：创建包含一个普通文件的归档，返回路径
 static std::string create_archive_with_file(TempDir& archive_tmp, const std::string& content) {
     auto path = archive_tmp.path() + "/archive.dat";
@@ -366,4 +380,257 @@ TEST(RestorerContract, RestoreMetadata) {
     struct stat st;
     EXPECT_EQ(stat(target.c_str(), &st), 0);
     EXPECT_EQ(st.st_mode & 0777, 0755u);
+}
+
+TEST(RestorerContract, RestoreMetadataMissingTargetFails) {
+    TempDir restore_tmp;
+    auto restorer = create_restorer();
+
+    EntryInfo meta;
+    Result r = restorer->restore_metadata(
+        restore_tmp.path() + "/missing", meta);
+
+    EXPECT_EQ(r.status, Status::FAILED);
+}
+
+TEST(RestorerContract, RejectsPathTraversal) {
+    TempDir restore_tmp;
+    auto restorer = create_restorer();
+    auto reader = open_archive("/tmp/nonexistent_archive");
+    EntryInfo entry;
+    entry.path = "../escape.txt";
+    entry.type = EntryType::REGULAR_FILE;
+
+    Result r = restorer->restore_entry(
+        restore_tmp.path(), entry, *reader, ConflictPolicy::OVERWRITE);
+    EXPECT_EQ(r.status, Status::FAILED);
+}
+
+TEST(RestorerContract, RejectsSymlinkInParentChain) {
+    TempDir restore_tmp;
+    restore_tmp.create_symlink("redirect", "/tmp");
+    auto restorer = create_restorer();
+    auto reader = open_archive("/tmp/nonexistent_archive");
+    EntryInfo entry;
+    entry.path = "redirect/escape.txt";
+    entry.type = EntryType::REGULAR_FILE;
+
+    Result r = restorer->restore_entry(
+        restore_tmp.path(), entry, *reader, ConflictPolicy::OVERWRITE);
+    EXPECT_EQ(r.status, Status::FAILED);
+}
+
+TEST(RestorerContract, FailedOverwritePreservesExistingFile) {
+    TempDir restore_tmp;
+    restore_tmp.create_file("existing.txt", "original");
+    auto restorer = create_restorer();
+    auto reader = open_archive("/tmp/nonexistent_archive");
+    EntryInfo entry;
+    entry.path = "existing.txt";
+    entry.type = EntryType::REGULAR_FILE;
+    entry.size = 10;
+
+    Result r = restorer->restore_entry(
+        restore_tmp.path(), entry, *reader, ConflictPolicy::OVERWRITE);
+    EXPECT_EQ(r.status, Status::FAILED);
+    std::ifstream input(restore_tmp.path() + "/existing.txt");
+    std::ostringstream content;
+    content << input.rdbuf();
+    EXPECT_EQ(content.str(), "original");
+}
+
+TEST(RestorerContract, ConflictRenameRestoresContentAndMetadataToRenamedPath) {
+    TempDir archive_tmp;
+    TempDir restore_tmp;
+    restore_tmp.create_file("file.txt", "original");
+    const auto archive_path = archive_tmp.path() + "/archive.dat";
+    auto writer = create_archive(archive_path);
+    EntryInfo entry;
+    entry.path = "file.txt";
+    entry.type = EntryType::REGULAR_FILE;
+    entry.size = 3;
+    entry.permissions = 0600;
+    entry.uid = ::getuid();
+    entry.gid = ::getgid();
+    std::istringstream content("new");
+    ASSERT_EQ(writer->add_entry(entry, content).status, Status::SUCCESS);
+    ASSERT_EQ(writer->commit().status, Status::SUCCESS);
+    auto reader = open_archive(archive_path);
+    ASSERT_EQ(reader->validate().status, Status::SUCCESS);
+    EntryInfo restored_entry;
+    ASSERT_EQ(reader->next_entry(restored_entry).status, Status::SUCCESS);
+    auto restorer = create_restorer();
+
+    ASSERT_EQ(restorer->restore_entry(
+        restore_tmp.path(), restored_entry, *reader, ConflictPolicy::RENAME).status,
+        Status::SUCCESS);
+    ASSERT_EQ(restorer->restore_metadata(
+        restore_tmp.path() + "/file.txt", restored_entry).status, Status::SUCCESS);
+
+    std::ifstream renamed(restore_tmp.path() + "/file.txt.1");
+    std::ostringstream renamed_content;
+    renamed_content << renamed.rdbuf();
+    EXPECT_EQ(renamed_content.str(), "new");
+    struct stat metadata {};
+    ASSERT_EQ(::stat((restore_tmp.path() + "/file.txt.1").c_str(), &metadata), 0);
+    EXPECT_EQ(metadata.st_mode & 0777, 0600u);
+}
+
+TEST(RestorerContract, ConflictSkipDoesNotChangeExistingMetadata) {
+    TempDir restore_tmp;
+    restore_tmp.create_file("file.txt", "original");
+    const auto target = restore_tmp.path() + "/file.txt";
+    ASSERT_EQ(::chmod(target.c_str(), 0640), 0);
+    auto restorer = create_restorer();
+    auto reader = open_archive("/tmp/nonexistent_archive");
+    EntryInfo entry;
+    entry.path = "file.txt";
+    entry.type = EntryType::REGULAR_FILE;
+    entry.permissions = 0777;
+    entry.uid = ::getuid();
+    entry.gid = ::getgid();
+
+    ASSERT_EQ(restorer->restore_entry(
+        restore_tmp.path(), entry, *reader, ConflictPolicy::SKIP).status,
+        Status::SUCCESS);
+    ASSERT_EQ(restorer->restore_metadata(target, entry).status, Status::SUCCESS);
+
+    struct stat metadata {};
+    ASSERT_EQ(::stat(target.c_str(), &metadata), 0);
+    EXPECT_EQ(metadata.st_mode & 0777, 0640u);
+}
+
+TEST(RestorerContract, OverwriteDirectoryPreservesUnrelatedChildren) {
+    TempDir restore_tmp;
+    restore_tmp.create_dir("existing");
+    restore_tmp.create_file("existing/unrelated.txt", "keep");
+    auto restorer = create_restorer();
+    auto reader = open_archive("/tmp/nonexistent_archive");
+    EntryInfo entry;
+    entry.path = "existing";
+    entry.type = EntryType::DIRECTORY;
+
+    Result result = restorer->restore_entry(
+        restore_tmp.path(), entry, *reader, ConflictPolicy::OVERWRITE);
+
+    EXPECT_EQ(result.status, Status::SUCCESS);
+    EXPECT_TRUE(std::filesystem::exists(
+        restore_tmp.path() + "/existing/unrelated.txt"));
+}
+
+TEST(RestorerContract, HardLinkUsesRenamedOriginalTarget) {
+    TempDir archive_tmp;
+    TempDir restore_tmp;
+    restore_tmp.create_file("original.txt", "old");
+    const auto archive_path = archive_tmp.path() + "/archive.dat";
+    auto writer = create_archive(archive_path);
+    EntryInfo original;
+    original.path = "original.txt";
+    original.type = EntryType::REGULAR_FILE;
+    original.size = 4;
+    std::istringstream content("data");
+    writer->add_entry(original, content);
+    EntryInfo hard_link;
+    hard_link.path = "linked.txt";
+    hard_link.type = EntryType::HARD_LINK;
+    hard_link.hard_link_target = "original.txt";
+    writer->add_entry(hard_link);
+    writer->commit();
+    auto reader = open_archive(archive_path);
+    ASSERT_EQ(reader->validate().status, Status::SUCCESS);
+    auto restorer = create_restorer();
+    EntryInfo first;
+    reader->next_entry(first);
+    ASSERT_EQ(restorer->restore_entry(
+        restore_tmp.path(), first, *reader, ConflictPolicy::RENAME).status,
+        Status::SUCCESS);
+    EntryInfo second;
+    reader->next_entry(second);
+
+    ASSERT_EQ(restorer->restore_entry(
+        restore_tmp.path(), second, *reader, ConflictPolicy::OVERWRITE).status,
+        Status::SUCCESS);
+    const auto renamed = std::filesystem::path(restore_tmp.path()) / "original.txt.1";
+    const auto linked = std::filesystem::path(restore_tmp.path()) / "linked.txt";
+    EXPECT_EQ(std::filesystem::hard_link_count(renamed), 2u);
+    EXPECT_TRUE(std::filesystem::equivalent(renamed, linked));
+}
+
+TEST(RestorerContract, ShortArchiveContentPreservesExistingFileAndCleansTemp) {
+    TempDir restore_tmp;
+    restore_tmp.create_file("file.txt", "original");
+    auto restorer = create_restorer();
+    ShortContentReader reader;
+    EntryInfo entry;
+    entry.path = "file.txt";
+    entry.type = EntryType::REGULAR_FILE;
+    entry.size = 10;
+
+    Result result = restorer->restore_entry(
+        restore_tmp.path(), entry, reader, ConflictPolicy::OVERWRITE);
+
+    EXPECT_EQ(result.status, Status::FAILED);
+    std::ifstream existing(restore_tmp.path() + "/file.txt");
+    std::ostringstream existing_content;
+    existing_content << existing.rdbuf();
+    EXPECT_EQ(existing_content.str(), "original");
+    for (const auto& candidate : std::filesystem::directory_iterator(restore_tmp.path())) {
+        EXPECT_EQ(candidate.path().filename().string().find(".restore."),
+                  std::string::npos);
+    }
+}
+
+TEST(RestorerContract, RejectsAbsoluteRestorePath) {
+    TempDir restore_tmp;
+    auto restorer = create_restorer();
+    auto reader = open_archive("/tmp/nonexistent_archive");
+    EntryInfo entry;
+    entry.path = "/tmp/escape.txt";
+    entry.type = EntryType::REGULAR_FILE;
+
+    Result result = restorer->restore_entry(
+        restore_tmp.path(), entry, *reader, ConflictPolicy::OVERWRITE);
+
+    EXPECT_EQ(result.status, Status::FAILED);
+}
+
+TEST(RestorerContract, DirectoryTimestampSurvivesChildCreation) {
+    TempDir archive_tmp;
+    TempDir restore_tmp;
+    const auto archive_path = archive_tmp.path() + "/archive.dat";
+    auto writer = create_archive(archive_path);
+    EntryInfo directory;
+    directory.path = "dir";
+    directory.type = EntryType::DIRECTORY;
+    directory.permissions = 0755;
+    directory.uid = ::getuid();
+    directory.gid = ::getgid();
+    directory.atime_sec = 1700000000;
+    directory.mtime_sec = 1700000000;
+    writer->add_entry(directory);
+    EntryInfo file;
+    file.path = "dir/file.txt";
+    file.type = EntryType::REGULAR_FILE;
+    file.size = 4;
+    std::istringstream content("data");
+    writer->add_entry(file, content);
+    writer->commit();
+    auto reader = open_archive(archive_path);
+    ASSERT_EQ(reader->validate().status, Status::SUCCESS);
+    auto restorer = create_restorer();
+    EntryInfo current;
+    reader->next_entry(current);
+    ASSERT_EQ(restorer->restore_entry(
+        restore_tmp.path(), current, *reader, ConflictPolicy::OVERWRITE).status,
+        Status::SUCCESS);
+    ASSERT_EQ(restorer->restore_metadata(
+        restore_tmp.path() + "/dir", current).status, Status::SUCCESS);
+    reader->next_entry(current);
+    ASSERT_EQ(restorer->restore_entry(
+        restore_tmp.path(), current, *reader, ConflictPolicy::OVERWRITE).status,
+        Status::SUCCESS);
+
+    struct stat metadata {};
+    ASSERT_EQ(::stat((restore_tmp.path() + "/dir").c_str(), &metadata), 0);
+    EXPECT_EQ(metadata.st_mtim.tv_sec, 1700000000);
 }
