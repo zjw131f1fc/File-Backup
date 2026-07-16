@@ -484,3 +484,207 @@ TEST(FilterFunctional, MultipleDepthPathExclude) {
     e.path = "home/user/temp/tmp.txt";
     EXPECT_FALSE(filter->should_include(e));
 }
+
+// ===== 10. glob 模式 — ? 在开头 =====
+TEST(FilterFunctional, GlobQuestionMarkAtStart) {
+    FilterRules rules;
+    rules.include_names = {"?at.txt"};
+    auto filter = create_filter(rules);
+
+    EntryInfo e;
+    e.path = "cat.txt";
+    EXPECT_TRUE(filter->should_include(e));
+
+    e.path = "at.txt";
+    EXPECT_FALSE(filter->should_include(e));  // 没有前缀字符
+
+    e.path = "chat.txt";
+    EXPECT_FALSE(filter->should_include(e));  // 两个字符
+}
+
+// ===== 11. glob 模式 — * 和 ? 组合 =====
+TEST(FilterFunctional, GlobStarAndQuestionMix) {
+    FilterRules rules;
+    rules.include_names = {"a?c*"};
+    auto filter = create_filter(rules);
+
+    EntryInfo e;
+    e.path = "abc123";
+    EXPECT_TRUE(filter->should_include(e));
+
+    e.path = "ac123";
+    EXPECT_FALSE(filter->should_include(e));  // 中间没有字符匹配 ?
+
+    e.path = "aXc";
+    EXPECT_TRUE(filter->should_include(e));
+}
+
+// ===== 12. 排除隐藏文件（以 . 开头） =====
+TEST(FilterFunctional, ExcludeDotFiles) {
+    FilterRules rules;
+    rules.exclude_names = {".*"};
+    auto filter = create_filter(rules);
+
+    EntryInfo e;
+    e.path = ".git";
+    EXPECT_FALSE(filter->should_include(e));  // 文件名 .git 匹配 .*
+
+    e.path = ".hidden";
+    EXPECT_FALSE(filter->should_include(e));
+
+    e.path = "visible.txt";
+    EXPECT_TRUE(filter->should_include(e));
+
+    // 目录内的文件：文件名是 config，不匹配 .*
+    e.path = ".git/config";
+    EXPECT_TRUE(filter->should_include(e));
+}
+
+// ===== 13. 路径排除多个模式 =====
+TEST(FilterFunctional, MultiplePathExcludePatterns) {
+    FilterRules rules;
+    rules.exclude_paths = {"build/", ".git/", "node_modules/", "__pycache__/", "venv/"};
+    auto filter = create_filter(rules);
+
+    EXPECT_FALSE(filter->should_include(EntryInfo{"build/a.o"}));
+    EXPECT_FALSE(filter->should_include(EntryInfo{".git/config"}));
+    EXPECT_FALSE(filter->should_include(EntryInfo{"node_modules/pkg/index.js"}));
+    EXPECT_FALSE(filter->should_include(EntryInfo{"__pycache__/main.pyc"}));
+    EXPECT_FALSE(filter->should_include(EntryInfo{"venv/bin/python"}));
+    EXPECT_TRUE(filter->should_include(EntryInfo{"src/main.cpp"}));
+}
+
+// ===== 14. 多个 UID 包含 =====
+TEST(FilterFunctional, MultipleUIDs) {
+    FilterRules rules;
+    rules.include_uids = {1000, 1001, 1002};
+    auto filter = create_filter(rules);
+
+    for (auto uid : {1000, 1001, 1002}) {
+        EntryInfo e;
+        e.path = "user_file";
+        e.uid = uid;
+        EXPECT_TRUE(filter->should_include(e));
+    }
+
+    EntryInfo e;
+    e.path = "other";
+    e.uid = 999;
+    EXPECT_FALSE(filter->should_include(e));
+}
+
+// ===== 15. 复杂组合：全部六类筛选 =====
+TEST(FilterFunctional, AllSixFiltersCombined) {
+    FilterRules rules;
+    rules.include_paths = {"project/"};
+    rules.exclude_paths = {"project/test/"};
+    rules.include_types = {EntryType::REGULAR_FILE};
+    rules.include_names = {"*.cpp", "*.h"};
+    rules.exclude_names = {"test_*"};
+    rules.min_size = 10;
+    rules.max_size = 100000;
+    rules.include_uids = {1000};
+    rules.newer_than_sec = 1000;
+    rules.older_than_sec = 999999999;
+    auto filter = create_filter(rules);
+
+    // 全部满足
+    EntryInfo good;
+    good.path = "project/src/main.cpp";
+    good.type = EntryType::REGULAR_FILE;
+    good.size = 5000;
+    good.uid = 1000;
+    good.mtime_sec = 50000000;
+    EXPECT_TRUE(filter->should_include(good));
+
+    // 路径被排除
+    EntryInfo bad_path;
+    bad_path = {"project/test/test_main.cpp", EntryType::REGULAR_FILE, 5000, "", "", 0, 0644, 1000, 1000, 0, 0, 50000000, 0};
+    EXPECT_FALSE(filter->should_include(bad_path));
+
+    // 类型不对
+    EntryInfo bad_type;
+    bad_type = {"project/src", EntryType::DIRECTORY, 5000, "", "", 0, 0755, 1000, 1000, 0, 0, 50000000, 0};
+    EXPECT_FALSE(filter->should_include(bad_type));
+
+    // 名称被排除
+    EntryInfo bad_name;
+    bad_name = {"project/src/test_util.cpp", EntryType::REGULAR_FILE, 5000, "", "", 0, 0644, 1000, 1000, 0, 0, 50000000, 0};
+    EXPECT_FALSE(filter->should_include(bad_name));
+
+    // 尺寸太小
+    EntryInfo bad_size;
+    bad_size = {"project/src/tiny.h", EntryType::REGULAR_FILE, 5, "", "", 0, 0644, 1000, 1000, 0, 0, 50000000, 0};
+    EXPECT_FALSE(filter->should_include(bad_size));
+
+    // UID 不对
+    EntryInfo bad_uid;
+    bad_uid = {"project/src/other.cpp", EntryType::REGULAR_FILE, 5000, "", "", 0, 0644, 2000, 1000, 0, 0, 50000000, 0};
+    EXPECT_FALSE(filter->should_include(bad_uid));
+
+    // 时间太旧
+    EntryInfo bad_time;
+    bad_time = {"project/src/old.cpp", EntryType::REGULAR_FILE, 5000, "", "", 0, 0644, 1000, 1000, 0, 0, 500, 0};
+    EXPECT_FALSE(filter->should_include(bad_time));
+}
+
+// ===== 16. 特殊文件类型筛选 =====
+TEST(FilterFunctional, FilterSpecialFileTypes) {
+    FilterRules rules;
+    rules.include_types = {EntryType::FIFO, EntryType::CHARACTER_DEVICE, EntryType::BLOCK_DEVICE};
+    auto filter = create_filter(rules);
+
+    EntryInfo fifo;
+    fifo.path = "pipe";
+    fifo.type = EntryType::FIFO;
+    EXPECT_TRUE(filter->should_include(fifo));
+
+    EntryInfo chardev;
+    chardev.path = "tty0";
+    chardev.type = EntryType::CHARACTER_DEVICE;
+    EXPECT_TRUE(filter->should_include(chardev));
+
+    EntryInfo blkdev;
+    blkdev.path = "sda";
+    blkdev.type = EntryType::BLOCK_DEVICE;
+    EXPECT_TRUE(filter->should_include(blkdev));
+
+    EntryInfo regular;
+    regular.path = "file.txt";
+    regular.type = EntryType::REGULAR_FILE;
+    EXPECT_FALSE(filter->should_include(regular));
+}
+
+// ===== 17. 路径完全不匹配任何包含模式 =====
+TEST(FilterFunctional, PathCompletelyOutsideInclude) {
+    FilterRules rules;
+    rules.include_paths = {"src/", "include/"};
+    auto filter = create_filter(rules);
+
+    auto check = [&](const std::string& path, bool expected) {
+        EntryInfo e;
+        e.path = path;
+        EXPECT_EQ(filter->should_include(e), expected);
+    };
+
+    check("src/main.cpp", true);
+    check("include/utils.h", true);
+    check("build/output.o", false);
+    check("lib/libfoo.a", false);
+    check("README.md", false);
+}
+
+// ===== 18. 排除名称匹配所有 =====
+TEST(FilterFunctional, ExcludeAllNames) {
+    FilterRules rules;
+    rules.exclude_names = {"*"};
+    auto filter = create_filter(rules);
+
+    EntryInfo e;
+    e.path = "anything.txt";
+    EXPECT_FALSE(filter->should_include(e));
+    e.path = "a";
+    EXPECT_FALSE(filter->should_include(e));
+    e.path = "no_extension";
+    EXPECT_FALSE(filter->should_include(e));
+}
