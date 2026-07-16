@@ -3,6 +3,7 @@
 #include "../../tests/helpers/temp_dir.h"
 #include <chrono>
 #include <filesystem>
+#include <stdexcept>
 #include <thread>
 
 using namespace backup;
@@ -25,6 +26,12 @@ Task wait_for_terminal(TaskManager& task_manager, const std::string& task_id) {
 }
 
 }  // namespace
+
+TEST(TaskRuntime, RejectsInvalidConfiguration) {
+    TaskManager task_manager;
+    EXPECT_THROW(TaskRuntime(task_manager, 0, 1), std::invalid_argument);
+    EXPECT_THROW(TaskRuntime(task_manager, 1, 0), std::invalid_argument);
+}
 
 TEST(TaskRuntime, SubmitsBackupAndRunsInBackground) {
     TempDir tmp;
@@ -101,6 +108,26 @@ TEST(TaskRuntime, RejectsSubmissionAfterShutdown) {
     EXPECT_EQ(submission.result.status, Status::FAILED);
 }
 
+TEST(TaskRuntime, RunsRestoreAndRecordsFailure) {
+    TempDir tmp;
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    runtime.start();
+
+    RestoreRequest request;
+    request.archive_path = tmp.path() + "/missing.archive";
+    request.target_path = tmp.create_dir("restore");
+    request.conflict_policy = ConflictPolicy::SKIP;
+    const TaskSubmission submission = runtime.submit_restore(request);
+
+    ASSERT_TRUE(submission.accepted());
+    const Task task = wait_for_terminal(task_manager, submission.task_id);
+    EXPECT_EQ(task.status, TaskStatus::FAILED);
+    EXPECT_EQ(runtime.list_tasks().front().type, "restore");
+    EXPECT_FALSE(runtime.list_tasks().front().finished_at.empty());
+    runtime.shutdown();
+}
+
 TEST(TaskRuntime, ListsTaskMetadata) {
     TaskManager task_manager;
     TaskRuntime runtime(task_manager, 1, 4);
@@ -151,4 +178,23 @@ TEST(TaskRuntime, CapturesTaskEvents) {
     }
     EXPECT_EQ(events.back().task.status, TaskStatus::SUCCESS);
     runtime.shutdown();
+}
+
+TEST(TaskRuntime, CancelsPendingTaskAndFiltersEvents) {
+    TaskManager task_manager;
+    TaskRuntime runtime(task_manager, 1, 4);
+    BackupRequest request;
+    request.source_path = "/source";
+    request.output_path = "/archive";
+    const TaskSubmission submission = runtime.submit_backup(request);
+
+    ASSERT_TRUE(submission.accepted());
+    ASSERT_TRUE(runtime.cancel_task(submission.task_id));
+    EXPECT_FALSE(runtime.cancel_task(submission.task_id));
+
+    const auto events = runtime.get_events(submission.task_id);
+    ASSERT_FALSE(events.empty());
+    EXPECT_EQ(events.back().task.status, TaskStatus::CANCELLED);
+    EXPECT_TRUE(runtime.get_events(submission.task_id, events.back().id).empty());
+    EXPECT_TRUE(runtime.get_events("missing-task").empty());
 }
