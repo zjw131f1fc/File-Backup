@@ -62,8 +62,9 @@ Result BackupScheduler::run(const std::string& task_id, const BackupRequest& req
     // 根据扫描结果决定提交或终止归档
     Result final_result;
     if (scan_result.ok()) {
-        Progress p;
+        Progress p = task_manager_.get_task(task_id).progress;
         p.stage = "committing_archive";
+        p.current_path = request.output_path;
         task_manager_.update_progress(task_id, p);
         Result commit_result = archive_writer_->commit();
         if (commit_result.ok()) {

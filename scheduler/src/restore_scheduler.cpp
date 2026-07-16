@@ -62,10 +62,13 @@ Result RestoreScheduler::run(const std::string& task_id, const RestoreRequest& r
             continue;
         }
 
-        Progress p;
+        Progress p = task_manager_.get_task(task_id).progress;
         p.stage = "restoring";
         p.current_path = entry_info.path;
-        p.processed_entries++;
+        ++p.processed_entries;
+        if (entry_info.type == EntryType::REGULAR_FILE) {
+            p.processed_bytes += entry_info.size;
+        }
         task_manager_.update_progress(task_id, p);
 
         // 恢复条目（恢复器内部处理所有类型和文件流）

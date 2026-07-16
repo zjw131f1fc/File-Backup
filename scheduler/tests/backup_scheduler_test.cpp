@@ -60,7 +60,17 @@ TEST(BackupSchedulerContract, SuccessCallsCommit) {
     Result success_result;
     success_result.status = Status::SUCCESS;
     EXPECT_CALL(mock_scanner, scan_and_backup(_, _, _, _))
-        .WillOnce(Return(success_result));
+        .WillOnce(::testing::Invoke(
+            [&success_result](const std::string&, IFilter&, IArchiveWriter&,
+                              ProgressCallback callback) {
+                Progress progress;
+                progress.stage = "scanning";
+                progress.processed_entries = 3;
+                progress.processed_bytes = 120;
+                progress.current_path = "docs/report.txt";
+                EXPECT_TRUE(callback(progress));
+                return success_result;
+            }));
 
     Result commit_result;
     commit_result.status = Status::SUCCESS;
@@ -81,6 +91,8 @@ TEST(BackupSchedulerContract, SuccessCallsCommit) {
 
     Task task = task_mgr.get_task(task_id);
     EXPECT_EQ(task.status, TaskStatus::SUCCESS);
+    EXPECT_EQ(task.progress.processed_entries, 3u);
+    EXPECT_EQ(task.progress.processed_bytes, 120u);
 }
 
 TEST(BackupSchedulerContract, CommitFailureAbortsArchive) {

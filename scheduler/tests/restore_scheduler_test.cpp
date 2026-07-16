@@ -89,6 +89,7 @@ TEST(RestoreSchedulerContract, EntryFailureProducesPartialSuccess) {
         .WillOnce(::testing::Invoke([](EntryInfo& entry) {
             entry.path = "broken.txt";
             entry.type = EntryType::REGULAR_FILE;
+            entry.size = 42;
             Result result;
             result.status = Status::SUCCESS;
             return result;
@@ -108,6 +109,8 @@ TEST(RestoreSchedulerContract, EntryFailureProducesPartialSuccess) {
     const Result result = scheduler.run(task_id, req);
     EXPECT_EQ(result.status, Status::PARTIAL_SUCCESS);
     EXPECT_EQ(result.error_count, 1);
+    EXPECT_EQ(task_mgr.get_task(task_id).progress.processed_entries, 1u);
+    EXPECT_EQ(task_mgr.get_task(task_id).progress.processed_bytes, 42u);
 }
 
 TEST(RestoreSchedulerContract, NextEntryFailureIsCounted) {
