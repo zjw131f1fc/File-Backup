@@ -375,6 +375,7 @@ json filesystem_entry_json(const std::filesystem::directory_entry& entry) {
 WebApi::WebApi(TaskRuntime& runtime, ApiConfig config)
     : runtime_(runtime), config_(std::move(config)) {}
 
+// Parse the request target, validate input, and dispatch to the API routes.
 ApiResponse WebApi::handle(const std::string& method,
                            const std::string& target,
                            const std::string& body) {
@@ -383,6 +384,7 @@ ApiResponse WebApi::handle(const std::string& method,
     const std::string query = query_position == std::string::npos
         ? std::string() : target.substr(query_position + 1);
 
+    // Read-only task and filesystem routes.
     if (method == "GET" && path == "/api/health") {
         return json_response(200, {{"status", "ok"}, {"service", "backup-web"}});
     }
@@ -475,6 +477,7 @@ ApiResponse WebApi::handle(const std::string& method,
         return json_response(200, {{"path", normalized_path(requested_path).string()}, {"entries", entries}});
     }
 
+    // Filesystem mutation route used by the path picker.
     if (method == "POST" && path == "/api/filesystem/directories") {
         json request;
         try {
@@ -524,6 +527,7 @@ ApiResponse WebApi::handle(const std::string& method,
         });
     }
 
+    // Task detail, event stream, and cancellation routes.
     if (method == "GET" && path.rfind("/api/tasks/", 0) == 0) {
         const std::string suffix = path.substr(std::string("/api/tasks/").size());
         if (suffix.size() > 7 && suffix.compare(suffix.size() - 7, 7, "/events") == 0) {
@@ -578,6 +582,8 @@ ApiResponse WebApi::handle(const std::string& method,
     return handle_task_submission(path, body);
 }
 
+// Backup and restore requests share JSON parsing and submission error mapping,
+// but keep their path and request validation separate.
 ApiResponse WebApi::handle_task_submission(const std::string& path,
                                            const std::string& body) {
     json request;
@@ -718,57 +724,5 @@ void WebApi::mount(httplib::Server& server) {
         }
     });
 }
-
-struct WebApiServer::Impl {
-    Impl(TaskRuntime& runtime, ApiConfig config)
-        : runtime(runtime)
-        , config(std::move(config))
-        , api(runtime, this->config) {}
-
-    TaskRuntime& runtime;
-    ApiConfig config;
-    WebApi api;
-    httplib::Server server;
-    std::thread thread;
-    int bound_port = 0;
-    bool started = false;
-};
-
-WebApiServer::WebApiServer(TaskRuntime& runtime, ApiConfig config)
-    : impl_(std::make_unique<Impl>(runtime, std::move(config))) {}
-
-WebApiServer::~WebApiServer() {
-    stop();
-}
-
-bool WebApiServer::start() {
-    if (impl_->started) return true;
-    impl_->runtime.start();
-    impl_->api.mount(impl_->server);
-    if (impl_->config.port == 0) {
-        impl_->bound_port = impl_->server.bind_to_any_port(impl_->config.bind_address);
-    } else if (impl_->server.bind_to_port(impl_->config.bind_address, impl_->config.port)) {
-        impl_->bound_port = impl_->config.port;
-    } else {
-        impl_->bound_port = 0;
-    }
-    if (impl_->bound_port <= 0) {
-        impl_->runtime.shutdown();
-        return false;
-    }
-    impl_->started = true;
-    impl_->thread = std::thread([this] { impl_->server.listen_after_bind(); });
-    return true;
-}
-
-void WebApiServer::stop() {
-    if (!impl_->started) return;
-    impl_->server.stop();
-    if (impl_->thread.joinable()) impl_->thread.join();
-    impl_->started = false;
-    impl_->runtime.shutdown();
-}
-
-int WebApiServer::port() const noexcept { return impl_->bound_port; }
 
 }  // namespace backup

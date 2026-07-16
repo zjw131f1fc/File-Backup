@@ -1,5 +1,6 @@
 add_library(backup_web_api
     src/web_api.cpp
+    src/web_api_server.cpp
 )
 target_include_directories(backup_web_api PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
